@@ -1,0 +1,8 @@
+.cache
+CMakeFiles
+relib.rc
+*.cmake
+CMakeDoxy*
+CMakeCache.txt
+Makefile
+compile_commands.json

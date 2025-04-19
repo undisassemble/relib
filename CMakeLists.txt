@@ -1,0 +1,90 @@
+# Setup
+cmake_minimum_required(VERSION 3.22)
+if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+	set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE}")
+	set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE}")
+	set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/bin/${CMAKE_BUILD_TYPE}")
+	set(CMAKE_CXX_STANDARD 20)
+	set(CMAKE_CXX_STANDARD_REQUIRED true)
+	set(CMAKE_SYSTEM_NAME Windows)
+	if (NOT CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+		set(CMAKE_FIND_ROOT_PATH /usr/x86_64-w64-mingw32)
+		set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+		set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+		set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY) 
+		set(CMAKE_C_COMPILER x86_64-w64-mingw32-gcc)
+		set(CMAKE_CXX_COMPILER x86_64-w64-mingw32-g++)
+		include_directories("/usr/x86_64-w64-mingw32/include")
+		include_directories("/usr/share/mingw-w64/include")
+		link_directories("/usr/x86_64-w64-mingw32/lib")
+	endif()
+	set(RELIB_DEBUG_DEFAULT ON)
+else()
+	set(RELIB_DEBUG_DEFAULT OFF)
+endif()
+project("relib" LANGUAGES C CXX VERSION 0.0.0 DESCRIPTION "Library for analyzing AMD64 PEs.")
+set(CMAKE_SHARED_LIBRARY_PREFIX "")
+set(CMAKE_STATIC_LIBRARY_PREFIX "")
+
+# Compile options
+option(RELIB_SHARED "Build shared libraries (.dll), off builds static libraries (.lib)" ON)
+option(RELIB_DEBUG "Debug build" ${RELIB_DEBUG_DEFAULT})
+set(BUILD_SHARED_LIBS ${RELIB_SHARED})
+if (CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+	if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+		if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+			add_compile_options(-Wall)
+			add_compile_options(-Wno-write-strings)
+			add_compile_options(-Wno-switch)
+			add_compile_options(-Wno-sign-compare)
+		else()
+			add_compile_options(-O3)
+			add_compile_options(-w)
+		endif()
+		add_link_options(-static)
+		add_link_options(-Wl,-allow-multiple-definition)
+	else()
+		message(FATAL_ERROR "CMake build files only support clang/gcc")
+	endif()
+endif()
+
+# Versioning stuff
+configure_file("meta/relib.rc.in" "meta/relib.rc")
+
+# Add to include directories
+include_directories("include" "dependencies/zydis/include" "dependencies/zydis/dependencies/zycore/include")
+
+# Zydis
+option(ZYDIS_FEATURE_ENCODER "" OFF) # AsmJit is used for encoding instead
+option(ZYDIS_FEATURE_FORMATTER "" OFF)
+option(ZYDIS_BUILD_SHARED_LIB "" ${RELIB_SHARED})
+add_subdirectory("dependencies/zydis")
+
+# AsmJit
+if (RELIB_SHARED)
+	set(ASMJIT_EMBED OFF)
+else()
+	set(ASMJIT_EMBED ON)
+endif()
+option(ASMJIT_NO_AARCH64 "" TRUE)
+option(ASMJIT_NO_FOREIGN "" TRUE)
+add_subdirectory("dependencies/asmjit")
+
+# relib
+file(GLOB SOURCES
+	"src/*.cpp"
+	"meta/relib.rc"
+)
+add_library(relib ${SOURCES})
+target_compile_options(relib PUBLIC -fpermissive)
+target_link_options(relib PUBLIC -mwindows)
+target_link_libraries(relib Zydis)
+target_link_libraries(relib asmjit)
+set_target_properties(relib PROPERTIES PREFIX "")
+target_compile_definitions(relib PUBLIC _RELIB_INTERNAL)
+if (RELIB_SHARED)
+	set_target_properties(relib PROPERTIES SUFFIX ".dll")
+	target_compile_definitions(relib PUBLIC RELIB_SHARED)
+else()
+	set_target_properties(relib PROPERTIES SUFFIX ".lib")
+endif()

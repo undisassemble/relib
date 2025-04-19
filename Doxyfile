@@ -1,0 +1,20 @@
+PROJECT_NAME           = "relib"
+PROJECT_NUMBER         = 0.0.0
+PROJECT_BRIEF          = "Library for analyzing AMD64 PEs."
+TIMESTAMP              = DATETIME
+INPUT                  = src include README.md
+USE_MDFILE_AS_MAINPAGE = README.md
+GENERATE_LATEX         = NO
+EXTRACT_PRIVATE        = YES
+EXTRACT_ALL            = YES
+HTML_EXTRA_STYLESHEET  = docs/doxygen-awesome.css docs/doxygen-awesome-sidebar-only.css
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = YES
+FULL_SIDEBAR           = NO
+SEARCHENGINE           = YES
+HTML_COLORSTYLE        = DARK
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+PREDEFINED             = __declspec(x)=
+PREDEFINED            += __attribute__(x)=
