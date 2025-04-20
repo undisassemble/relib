@@ -1005,7 +1005,7 @@ RELIB_EXPORT bool Asm::FromDis(_In_ Line* pLine, _In_opt_ Label* pLabel) {
 
 RELIB_EXPORT bool Asm::Assemble() {
 	// Setup
-	if (!Sections.Size() || !pAsm) return false;
+	if (!Sections.Size()) return false; //|| !pAsm
 	ReLibData.LoggingCallback("Assembling\n");
 	Vector<Line>* pLines;
 	Line line;

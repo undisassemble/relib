@@ -6,3 +6,4 @@ CMakeDoxy*
 CMakeCache.txt
 Makefile
 compile_commands.json
+html
