@@ -1005,15 +1005,14 @@ RELIB_EXPORT bool Asm::FromDis(_In_ Line* pLine, _In_opt_ Label* pLabel) {
 
 RELIB_EXPORT bool Asm::Assemble() {
 	// Setup
-	if (!Sections.Size()) return false; //|| !pAsm
+	if (!Sections.Size()) return false;
+	if (!pAsm) {
+		ReLibData.ErrorCallback("Assembler not set\n");
+		return false;
+	}
 	ReLibData.LoggingCallback("Assembling\n");
 	Vector<Line>* pLines;
 	Line line;
-	Environment environment;
-	environment.setArch(Arch::kX64);
-	CodeHolder holder;
-	holder.init(environment);
-	Assembler a(&holder);
 
 	// Count total number of lines
 	ToDo = 0;
@@ -1034,7 +1033,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 		// Prepare next section
 		AsmSection section = Sections[SecIndex];
 		pLines = section.Lines;
-		section.NewRVA = a.offset() + SectionHeaders[0].VirtualAddress;
+		section.NewRVA = pAsm->offset() + SectionHeaders[0].VirtualAddress;
 		DWORD rva = section.NewRVA;
 		section.NewRawSize = 0;
 		section.NewVirtualSize = 0;
@@ -1045,7 +1044,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 			line = pLines->At(i);
 			line.NewRVA = rva;
 			pLines->Replace(i, line);
-			size_t off = a.offset();
+			size_t off = pAsm->offset();
 
 			switch (line.Type) {
 			case Decoded: {
@@ -1068,7 +1067,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 					int loc = XREFs.Find(refs);
 					if (loc < 0) {
 						XREFs.Push(refs);
-						ah = a.newLabel();
+						ah = pAsm->newLabel();
 						XREFLabels.Push(ah);
 					} else {
 						ah = XREFLabels[loc];
@@ -1076,7 +1075,6 @@ RELIB_EXPORT bool Asm::Assemble() {
 				}
 
 				// Encode
-				pAsm = &a; // REMOVE THIS!!!
 				FromDis(&line, rel >= 0 ? &ah : NULL);
 				break;
 			}
@@ -1084,42 +1082,42 @@ RELIB_EXPORT bool Asm::Assemble() {
 				Buffer buf = { 0 };
 				buf.Allocate(line.Embed.Size);
 				ReadRVA(line.OldRVA, buf.pBytes, line.Embed.Size);
-				a.embed(buf.pBytes, buf.u64Size);
+				pAsm->embed(buf.pBytes, buf.u64Size);
 				buf.Release();
 				break;
 			}
 			case RawInsert:
-				a.embed(line.RawInsert.pBytes, line.RawInsert.u64Size);
+				pAsm->embed(line.RawInsert.pBytes, line.RawInsert.u64Size);
 				break;
 			case Padding:
 				section.NewVirtualSize += line.Padding.Size;
-				a.db(0, line.Padding.Size);
+				pAsm->db(0, line.Padding.Size);
 				if (i < pLines->Size() - 1) {
 					ReLibData.ErrorCallback("Ran into padding in the middle of a section\n");
 					return false;
 				}
 				break;
 			case JumpTable:
-				LinkLaterOffsets.Push(a.offset());
-				a.dd(0);
+				LinkLaterOffsets.Push(pAsm->offset());
+				pAsm->dd(0);
 				LinkLater.Push(line);
 				break;
 			case Pointer:
-				LinkLaterOffsets.Push(a.offset());
-				if (line.Pointer.IsAbs) a.dq(0);
-				else a.dd(0);
+				LinkLaterOffsets.Push(pAsm->offset());
+				if (line.Pointer.IsAbs) pAsm->dq(0);
+				else pAsm->dd(0);
 				LinkLater.Push(line);
 			}
 
-			rva += a.offset() - off;
+			rva += pAsm->offset() - off;
 		}
 
 		// Finalize section
-		section.NewRawSize = a.offset() - (section.NewRVA - SectionHeaders[0].VirtualAddress);
+		section.NewRawSize = pAsm->offset() - (section.NewRVA - SectionHeaders[0].VirtualAddress);
 		section.NewRawSize -= section.NewVirtualSize;
 		section.NewVirtualSize += section.NewRawSize;
-		if (a.offset() % NTHeaders.OptionalHeader.SectionAlignment) {
-			a.db(0, NTHeaders.OptionalHeader.SectionAlignment - a.offset() % NTHeaders.OptionalHeader.SectionAlignment);
+		if (pAsm->offset() % NTHeaders.OptionalHeader.SectionAlignment) {
+			pAsm->db(0, NTHeaders.OptionalHeader.SectionAlignment - pAsm->offset() % NTHeaders.OptionalHeader.SectionAlignment);
 		}
 		Sections[SecIndex] = section;
 	}
@@ -1143,12 +1141,12 @@ RELIB_EXPORT bool Asm::Assemble() {
 				line.JumpTable.Base = TranslateOldAddress(line.JumpTable.Base);
 				line.JumpTable.Value -= line.JumpTable.Base;
 			}
-			*reinterpret_cast<DWORD*>(holder.textSection()->buffer().data() + LinkLaterOffsets[i]) = line.JumpTable.Value;
+			*reinterpret_cast<DWORD*>(pAsm->code()->textSection()->buffer().data() + LinkLaterOffsets[i]) = line.JumpTable.Value;
 		} else if (line.Type == Pointer) {
 			if (line.Pointer.IsAbs) {
-				*reinterpret_cast<QWORD*>(holder.textSection()->buffer().data() + LinkLaterOffsets[i]) = NTHeaders.OptionalHeader.ImageBase + TranslateOldAddress(line.Pointer.Abs - NTHeaders.OptionalHeader.ImageBase);
+				*reinterpret_cast<QWORD*>(pAsm->code()->textSection()->buffer().data() + LinkLaterOffsets[i]) = NTHeaders.OptionalHeader.ImageBase + TranslateOldAddress(line.Pointer.Abs - NTHeaders.OptionalHeader.ImageBase);
 			} else {
-				*reinterpret_cast<DWORD*>(holder.textSection()->buffer().data() + LinkLaterOffsets[i]) = TranslateOldAddress(line.Pointer.RVA);
+				*reinterpret_cast<DWORD*>(pAsm->code()->textSection()->buffer().data() + LinkLaterOffsets[i]) = TranslateOldAddress(line.Pointer.RVA);
 			}
 		} else {
 			ReLibData.ErrorCallback("This also should never happen (LinkLater[i].Type != JumpTable && LinkLater[i].Type != Pointer)\n");
@@ -1156,7 +1154,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 		}
 	}
 	for (int i = 0; i < XREFs.Size(); i++) {
-		holder.bindLabel(XREFLabels[i], holder.textSection()->id(), TranslateOldAddress(XREFs[i]) - SectionHeaders[0].VirtualAddress);
+		pAsm->code()->bindLabel(XREFLabels[i], pAsm->code()->textSection()->id(), TranslateOldAddress(XREFs[i]) - SectionHeaders[0].VirtualAddress);
 	}
 	LinkLater.Release();
 	LinkLaterOffsets.Release();
@@ -1176,10 +1174,10 @@ RELIB_EXPORT bool Asm::Assemble() {
 	Vector<DWORD> Relocations = GetRelocations();
 	for (int i = 0; i < Relocations.Size(); i++) {
 		Relocations[i] = TranslateOldAddress(Relocations[i]);
-		/*for (int j = 0; j < holder.relocEntries().size(); j++) {
-			if (holder.relocEntries().at(j)->relocType() == RelocType::kAbsToAbs) {
+		/*for (int j = 0; j < pAsm->code()->relocEntries().size(); j++) {
+			if (pAsm->code()->relocEntries().at(j)->relocType() == RelocType::kAbsToAbs) {
 				
-			} else if (holder.relocEntries().at(j)->relocType() != RelocType::kNone) {
+			} else if (pAsm->code()->relocEntries().at(j)->relocType() != RelocType::kNone) {
 				ReLibData.WarningCallback("Relocation not handled\n");
 			}
 		}*/
@@ -1189,11 +1187,11 @@ RELIB_EXPORT bool Asm::Assemble() {
 
 	// Copy data
 	ReLibData.LoggingCallback("Finalizing\n");
-	holder.flatten();
-	holder.relocateToBase(NTHeaders.OptionalHeader.ImageBase + SectionHeaders[0].VirtualAddress);
-	ReLibData.LoggingCallback("Assembled code has %d sections, and has %d relocations\n", holder.sectionCount(), holder.hasRelocEntries() ? holder.relocEntries().size() : 0);
-	if (holder.hasUnresolvedLinks()) holder.resolveUnresolvedLinks();
-	if (holder.hasUnresolvedLinks()) ReLibData.WarningCallback("Assembled code has %d unsolved links\n", holder.unresolvedLinkCount());
+	pAsm->code()->flatten();
+	pAsm->code()->relocateToBase(NTHeaders.OptionalHeader.ImageBase + SectionHeaders[0].VirtualAddress);
+	ReLibData.LoggingCallback("Assembled code has %d sections, and has %d relocations\n", pAsm->code()->sectionCount(), pAsm->code()->hasRelocEntries() ? pAsm->code()->relocEntries().size() : 0);
+	if (pAsm->code()->hasUnresolvedLinks()) pAsm->code()->resolveUnresolvedLinks();
+	if (pAsm->code()->hasUnresolvedLinks()) ReLibData.WarningCallback("Assembled code has %d unsolved links\n", pAsm->code()->unresolvedLinkCount());
 	for (int i = 0; i < NTHeaders.FileHeader.NumberOfSections; i++) {
 		SectionData[i].Release();
 		Buffer buf = { 0 };
@@ -1203,11 +1201,11 @@ RELIB_EXPORT bool Asm::Assemble() {
 			i--;
 		}
 		buf.Allocate(Sections[i].NewRawSize);
-		if (holder.textSection()->buffer().size() < Sections[i].NewRVA - SectionHeaders[0].VirtualAddress + buf.u64Size) {
-			ReLibData.ErrorCallback("Failed to read assembled code (size: 0x%p, expected: 0x%p)\n", holder.textSection()->buffer().size(), Sections[i].NewRVA - SectionHeaders[0].VirtualAddress + buf.u64Size);
+		if (pAsm->code()->textSection()->buffer().size() < Sections[i].NewRVA - SectionHeaders[0].VirtualAddress + buf.u64Size) {
+			ReLibData.ErrorCallback("Failed to read assembled code (size: 0x%p, expected: 0x%p)\n", pAsm->code()->textSection()->buffer().size(), Sections[i].NewRVA - SectionHeaders[0].VirtualAddress + buf.u64Size);
 			return false;
 		}
-		memcpy(buf.pBytes, holder.textSection()->buffer().data() + Sections[i].NewRVA - SectionHeaders[0].VirtualAddress, buf.u64Size);
+		memcpy(buf.pBytes, pAsm->code()->textSection()->buffer().data() + Sections[i].NewRVA - SectionHeaders[0].VirtualAddress, buf.u64Size);
 		SectionData[i] = buf;
 		IMAGE_SECTION_HEADER header = SectionHeaders[i];
 		header.VirtualAddress = Sections[i].NewRVA;

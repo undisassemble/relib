@@ -40,10 +40,11 @@ typedef struct _ReLibMetrics_t {
 
 // Internal data
 #ifdef _RELIB_INTERNAL
+RELIB_EXPORT void _BaseLogger(const char* message, ...);
 typedef struct _ReLibData_t {
-	void (__stdcall *ErrorCallback)(const char* message, ...) = NULL;
-	void (__stdcall *WarningCallback)(const char* message, ...) = NULL;
-	void (__stdcall *LoggingCallback)(const char* message, ...) = NULL;
+	void (__stdcall *ErrorCallback)(const char* message, ...) = _BaseLogger;
+	void (__stdcall *WarningCallback)(const char* message, ...) = _BaseLogger;
+	void (__stdcall *LoggingCallback)(const char* message, ...) = _BaseLogger;
 } ReLibData_t;
 extern ReLibData_t ReLibData;
 #endif

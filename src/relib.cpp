@@ -63,3 +63,5 @@ RELIB_EXPORT void relib::SetWarningCallback(void (__stdcall *callback)(const cha
 RELIB_EXPORT void relib::SetLoggingCallback(void (__stdcall *callback)(const char* message, ...)) {
     ReLibData.LoggingCallback = callback;
 }
+
+RELIB_EXPORT void _BaseLogger(const char* message, ...) {}
