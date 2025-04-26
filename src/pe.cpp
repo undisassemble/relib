@@ -3,10 +3,11 @@
  * @author undisassemble
  * @brief Portable executable parsing functions
  * @version 0.0.0
- * @date 2025-04-19
+ * @date 2025-04-26
  * @copyright MIT License
  */
 
+#define _RELIB_INTERNAL
 #include "relib/pe.hpp"
 
 RELIB_EXPORT PE::PE(_In_ char* sFileName) {

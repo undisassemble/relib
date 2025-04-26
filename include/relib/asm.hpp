@@ -300,7 +300,6 @@ public:
 
 	/*!
 	 * @brief Assembles application.
-	 * @todo Make it use pAsm
 	 * 
 	 * @retval true Success.
 	 * @retval false Failure.

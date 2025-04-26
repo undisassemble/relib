@@ -3,10 +3,11 @@
  * @author undisassemble
  * @brief relib core functions
  * @version 0.0.0
- * @date 2025-04-19
+ * @date 2025-04-26
  * @copyright MIT License
  */
 
+#define _RELIB_INTERNAL
 #include "relib/relib.hpp"
 
 RELIB_EXPORT ReLibMetrics_t ReLibMetrics;
