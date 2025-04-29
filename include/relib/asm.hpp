@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-04-19
+ * @date 2025-04-29
  * @copyright MIT License
  * @bug Crashes due to `_pei386_runtime_relocator`.
  */
@@ -201,8 +201,9 @@ protected:
 	uint64_t Progress = 0;                //!< Total number of disassembled bytes.
 	uint64_t ToDo = 0;                    //!< Estimated number of bytes to disassemble.
 	asmjit::x86::Assembler* pAsm = NULL;  //!< Which assembler to use when assembling.
-
+	
 public:
+	float fProgress = 0.f;                //!< Task progress, 0 to 1.
 	RELIB_EXPORT Asm();
 	RELIB_EXPORT ~Asm();
 

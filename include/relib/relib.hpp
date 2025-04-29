@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief relib main include
  * @version 0.0.0
- * @date 2025-04-26
+ * @date 2025-04-29
  * @copyright MIT License
  */
 
@@ -29,13 +29,13 @@ typedef uint64_t QWORD;
 
 /*!
  * @brief Data about what relib is doing
+ * @todo Ensure this is threadsafe
  */
 typedef struct _ReLibMetrics_t {
 	struct {
 		uint64_t InUse = 0;    //!< Total memory in use
 		uint64_t Reserved = 0; //!< Total memory reserved.
 	} Memory;
-	float fProgress = 0.f;     //!< Task progress, 0 to 1.
 } ReLibMetrics_t;
 
 // Internal data

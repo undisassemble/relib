@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-04-26
+ * @date 2025-04-29
  * @copyright MIT License
  */
 
@@ -433,7 +433,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 
 			// Edit progress
 			Progress += Instruction.length;
-			ReLibMetrics.fProgress = (float)Progress / (float)ToDo;
+			fProgress = (float)Progress / (float)ToDo;
 
 			TempLines.Push(CraftedLine);
 
@@ -924,7 +924,7 @@ RELIB_EXPORT bool Asm::Disassemble() {
 	}
 	ReLibData.LoggingCallback("Filled gaps\n");
 	ReLibData.LoggingCallback("Finished disassembly\n");
-	ReLibMetrics.fProgress = 0.f;
+	fProgress = 0.f;
 	return true;
 }
 
@@ -1041,7 +1041,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 
 		// Assemble lines
 		for (int i = 0; i < pLines->Size(); i++) {
-			ReLibMetrics.fProgress = (float)i / (float)pLines->Size();
+			fProgress = (float)i / (float)pLines->Size();
 			line = pLines->At(i);
 			line.NewRVA = rva;
 			pLines->Replace(i, line);
@@ -1124,7 +1124,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 	}
 
 	// Link
-	ReLibMetrics.fProgress = 0.f;
+	fProgress = 0.f;
 	ReLibData.LoggingCallback("Linking\n");
 	if (XREFs.Size() != XREFLabels.Size()) {
 		ReLibData.ErrorCallback("This should never happen (XREFs.Size() != XREFLabels.Size())\n");
@@ -1292,7 +1292,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 
 	FixHeaders();
 	ReLibData.LoggingCallback("Finished assembly\n");
-	ReLibMetrics.fProgress = 0.f;
+	fProgress = 0.f;
 	return true;
 }
 
