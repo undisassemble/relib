@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief relib main include
  * @version 0.0.0
- * @date 2025-04-29
+ * @date 2025-05-16
  * @copyright MIT License
  */
 
@@ -174,10 +174,6 @@ struct Vector {
 		// Create buffer
 		if (raw.u64Size < sizeof(T) || !raw.pBytes || !raw.u64Size) {
 			raw.Allocate(sizeof(T) * (bExponentialGrowth ? 10 : 1));
-			if (!raw.pBytes) {
-				DebugBreak();
-				exit(1);
-			}
 			ZeroMemory(raw.pBytes, raw.u64Size);
 		}
 		
@@ -193,10 +189,6 @@ struct Vector {
 				NewSize = nItems * sizeof(T);
 			}
 			raw.Allocate(NewSize);
-			if (!raw.pBytes) {
-				DebugBreak();
-				exit(1);
-			}
 			ZeroMemory(raw.pBytes + OldSize, NewSize - OldSize);
 		}
 	}

@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief relib core functions
  * @version 0.0.0
- * @date 2025-04-26
+ * @date 2025-05-16
  * @copyright MIT License
  */
 
@@ -21,10 +21,6 @@ RELIB_EXPORT void Buffer::Merge(_In_ Buffer Other, _In_ bool bFreeOther) {
         u64Size = Other.u64Size;
     } else {
         Allocate(u64Size + Other.u64Size);
-        if (!pBytes) {
-            DebugBreak();
-            exit(1);
-        }
         memcpy(pBytes + u64Size - Other.u64Size, Other.pBytes, Other.u64Size);
         if (bFreeOther) {
             Other.Release();
@@ -41,6 +37,11 @@ RELIB_EXPORT void Buffer::Allocate(_In_ uint64_t Size) {
 	ReLibMetrics.Memory.InUse += Size - u64Size;
 	u64Size = Size;
 	pBytes = reinterpret_cast<BYTE*>(realloc(pBytes, u64Size));
+    if (!pBytes) {
+        MessageBoxA(NULL, "Failed to allocate memory", "ReLib crashed", MB_OK | MB_ICONERROR);
+        DebugBreak();
+        exit(1);
+    }
 }
 
 RELIB_EXPORT void Buffer::Release() {
