@@ -11,12 +11,11 @@ project("ReLib" LANGUAGES C CXX VERSION 0.0.0 DESCRIPTION "Library for analyzing
 option(RELIB_SHARED "Build shared libraries (.dll), off builds static libraries (.lib)" ON)
 option(RELIB_DEBUG "Debug build" ${RELIB_DEBUG_DEFAULT})
 set(BUILD_SHARED_LIBS ${RELIB_SHARED})
+message(STATUS "RELIB_SHARED = ${RELIB_SHARED}")
+message(STATUS "RELIB_DEBUG  = ${RELIB_DEBUG}")
 
 # Versioning stuff
 configure_file("meta/relib.rc.in" "meta/relib.rc")
-
-# Add to include directories
-include_directories("include" "dependencies/zydis/include" "dependencies/zydis/dependencies/zycore/include")
 
 # Zydis
 option(ZYDIS_FEATURE_ENCODER "" OFF)
@@ -40,8 +39,8 @@ file(GLOB SOURCES
 	"meta/relib.rc"
 )
 add_library(relib ${SOURCES})
-target_link_libraries(relib Zydis)
-target_link_libraries(relib asmjit)
+target_include_directories(relib AFTER PUBLIC "include")
+target_link_libraries(relib Zydis asmjit)
 set_target_properties(relib PROPERTIES PREFIX "")
 if (RELIB_SHARED)
 	set_target_properties(relib PROPERTIES SUFFIX ".dll")
