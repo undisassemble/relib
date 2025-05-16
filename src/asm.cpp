@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-04-29
+ * @date 2025-05-16
  * @copyright MIT License
  */
 
@@ -366,8 +366,8 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 	Vector<Line> TempLines;
 	TempLines.bExponentialGrowth = true;
 	DWORD SectionIndex;
-	char FormattedBuf[128];
 #ifdef ENABLE_DUMPING
+	char FormattedBuf[128];
 	ZydisFormatter Formatter;
 	ZydisFormatterInit(&Formatter, ZYDIS_FORMATTER_STYLE_INTEL);
 #endif
@@ -454,7 +454,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 					trva = odisp + rva;
 					if (!(trva != 0xCCCCCCCC && trva >= Sections[SectionIndex].OldRVA && trva < Sections[SectionIndex].OldRVA + Sections[SectionIndex].OldSize)) break;
 					if (!JumpTables.Includes(trva)) JumpTables.Push(trva);
-					Line TempJumpTable = { 0 };
+					Line TempJumpTable;
 					TempJumpTable.OldRVA = disp;
 					TempJumpTable.Type = JumpTable;
 					TempJumpTable.bRelative = true;
@@ -475,7 +475,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 				DWORD disp = CraftedLine.Decoded.Operands[1].mem.disp.value;
 				while ((rva = ReadRVA<DWORD>(disp)) != 0xCCCCCCCC && rva >= Sections[SectionIndex].OldRVA && rva < Sections[SectionIndex].OldRVA + Sections[SectionIndex].OldSize) {
 					if (!JumpTables.Includes(rva)) JumpTables.Push(rva);
-					Line TempJumpTable = { 0 };
+					Line TempJumpTable;
 					TempJumpTable.OldRVA = disp;
 					TempJumpTable.Type = JumpTable;
 					TempJumpTable.JumpTable.Value = rva;
@@ -1473,7 +1473,7 @@ RELIB_EXPORT void Asm::RemoveData(_In_ DWORD dwRVA, _In_ DWORD dwSize) {
 		return;
 	}
 
-	Line data_new = { 0 };
+	Line data_new;
 	data_new.Type = Embed;
 	if (data.OldRVA < dwRVA) {
 		data_new.OldRVA = data.OldRVA;
@@ -1511,7 +1511,7 @@ RELIB_EXPORT DWORD GetLineSize(_In_ const Line& line) {
 	case Pointer:
 		return (line.Pointer.IsAbs ? sizeof(uint64_t) : sizeof(DWORD));
 	}
-	ReLibData.ErrorCallback("Failed to calculate length of instruction (unknown mnemonic)\n");
+	ReLibData.ErrorCallback("Failed to calculate length of instruction (unknown type)\n");
 	return 0;
 }
 

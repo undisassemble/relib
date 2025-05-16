@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-04-29
+ * @date 2025-05-16
  * @copyright MIT License
  * @bug Crashes due to `_pei386_runtime_relocator`.
  */
@@ -22,6 +22,7 @@ using namespace asmjit;
  * @see Line
  */
 enum LineType : BYTE {
+	Unknown,   //!< Line type is not set
 	Decoded,   //!< Line is a decoded instruction.
 	Embed,     //!< Line is the address and size of raw data.
 	RawInsert, //!< Raw data that should be inserted from a different buffer.
@@ -76,7 +77,7 @@ struct DecodedOperand {
  * @see DecodedOperand
  */
 struct Line {
-	LineType Type : 4;                      //!< The type of data stored, represents which members should be used.
+	LineType Type : 4 = Unknown;            //!< The type of data stored, represents which members should be used.
 	bool bRelative : 1 = false;             //!< Jump table is relative to first entry or request holds instruction index instead of absolute address (i.e. jmp 0 is jumping to the first instruction in the index, if doing this, make the instruction RIP-relative anyway).
 	bool bRelocate : 1 = false;             //!< For requests that point to an old RVA and need to be relocated.
 	DWORD OldRVA = 0;                       //!< Old RVA of the line.
