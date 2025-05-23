@@ -1,44 +1,44 @@
 /*!
  * @file relib.cpp
  * @author undisassemble
- * @brief relib core functions
+ * @brief ReLib core functions
  * @version 0.0.0
- * @date 2025-05-16
+ * @date 2025-05-23
  * @copyright MIT License
  */
 
 #define _RELIB_INTERNAL
 #include "relib/relib.hpp"
+#include <stdlib.h>
 
 RELIB_EXPORT ReLibMetrics_t ReLibMetrics;
-ReLibData_t ReLibData;
+_ReLibData_t RELIB_EXPORT _ReLibData;
 
 RELIB_EXPORT void Buffer::Merge(_In_ Buffer Other, _In_ bool bFreeOther) {
-    if (!Other.pBytes || !Other.u64Size) {
+    if (!Other.pBytes || !Other.szBytes) {
         return;
-    } else if (!pBytes || !u64Size) {
-        pBytes = Other.pBytes;
-        u64Size = Other.u64Size;
+    } else if (!pBytes || !szBytes) {
+        Allocate(Other.Size());
+        memcpy_s(pBytes, szBytes, Other.Data(), Other.Size());
     } else {
-        Allocate(u64Size + Other.u64Size);
-        memcpy(pBytes + u64Size - Other.u64Size, Other.pBytes, Other.u64Size);
+        Allocate(szBytes + Other.szBytes);
+        memcpy(pBytes + szBytes - Other.szBytes, Other.pBytes, Other.szBytes);
         if (bFreeOther) {
             Other.Release();
         }
     }
 }
 
-RELIB_EXPORT void Buffer::Allocate(_In_ uint64_t Size) {
+RELIB_EXPORT void Buffer::Allocate(_In_ size_t Size) {
 	if (!Size) {
 		Release();
 		return;
 	}
-	ReLibMetrics.Memory.Reserved += Size - u64Size;
-	ReLibMetrics.Memory.InUse += Size - u64Size;
-	u64Size = Size;
-	pBytes = reinterpret_cast<BYTE*>(realloc(pBytes, u64Size));
+	ReLibMetrics.Memory.Reserved += Size - szBytes;
+	szBytes = Size;
+	pBytes = reinterpret_cast<BYTE*>(realloc(pBytes, szBytes));
     if (!pBytes) {
-        MessageBoxA(NULL, "Failed to allocate memory", "ReLib crashed", MB_OK | MB_ICONERROR);
+        _ReLibData.ErrorCallback("Failed to allocate memory (requested %llu bytes)\n", szBytes);
         DebugBreak();
         exit(1);
     }
@@ -47,23 +47,23 @@ RELIB_EXPORT void Buffer::Allocate(_In_ uint64_t Size) {
 RELIB_EXPORT void Buffer::Release() {
     if (pBytes) {
 		free(pBytes);
-		ReLibMetrics.Memory.Reserved -= u64Size;
-		ReLibMetrics.Memory.InUse -= u64Size;
+		ReLibMetrics.Memory.Reserved -= szBytes;
+		ReLibMetrics.Memory.InUse -= szBytes;
 	}
     pBytes = NULL;
-    u64Size = 0;
+    szBytes = 0;
 }
 
 RELIB_EXPORT void relib::SetErrorCallback(void (__stdcall *callback)(const char* message, ...)) {
-    ReLibData.ErrorCallback = callback;
+    _ReLibData.ErrorCallback = callback;
 }
 
 RELIB_EXPORT void relib::SetWarningCallback(void (__stdcall *callback)(const char* message, ...)) {
-    ReLibData.WarningCallback = callback;
+    _ReLibData.WarningCallback = callback;
 }
 
 RELIB_EXPORT void relib::SetLoggingCallback(void (__stdcall *callback)(const char* message, ...)) {
-    ReLibData.LoggingCallback = callback;
+    _ReLibData.LoggingCallback = callback;
 }
 
 RELIB_EXPORT void _BaseLogger(const char* message, ...) {}

@@ -3,11 +3,13 @@
  * @author undisassemble
  * @brief Portable executable parsing functions
  * @version 0.0.0
- * @date 2025-04-26
+ * @date 2025-05-23
  * @copyright MIT License
  */
 
 #define _RELIB_INTERNAL
+#include <limits.h>
+#include <stdlib.h>
 #include "relib/pe.hpp"
 
 RELIB_EXPORT PE::PE(_In_ char* sFileName) {
@@ -47,16 +49,14 @@ RELIB_EXPORT PE::PE(_In_ PE* pOther) {
 	Status = pOther->Status;
 	DosHeader = pOther->DosHeader;
 	NTHeaders = pOther->NTHeaders;
-	DosStub.Allocate(pOther->DosStub.u64Size);
-	memcpy(DosStub.pBytes, pOther->DosStub.pBytes, DosStub.u64Size);
-	SectionHeaders.raw.Allocate(pOther->SectionHeaders.raw.u64Size);
-	SectionHeaders.nItems = pOther->SectionHeaders.nItems;
-	memcpy(SectionHeaders.raw.pBytes, pOther->SectionHeaders.raw.pBytes, SectionHeaders.raw.u64Size);
+	DosStub.Allocate(pOther->DosStub.Size());
+	memcpy_s(DosStub.Data(), DosStub.Size(), pOther->DosStub.Data(), pOther->DosStub.Size());
+	SectionHeaders.Merge(pOther->SectionHeaders);
 	for (int i = 0; i < NTHeaders.FileHeader.NumberOfSections; i++) {
-		Buffer buf = { 0 };
-		if (pOther->SectionData[i].u64Size) {
-			buf.Allocate(pOther->SectionData[i].u64Size);
-			memcpy(buf.pBytes, pOther->SectionData[i].pBytes, buf.u64Size);
+		Buffer buf;
+		if (pOther->SectionData[i].Size()) {
+			buf.Allocate(pOther->SectionData[i].Size());
+			memcpy_s(buf.Data(), buf.Size(), pOther->SectionData[i].Data(), pOther->SectionData[i].Size());
 		}
 		SectionData.Push(buf);
 	}
@@ -69,88 +69,94 @@ RELIB_EXPORT bool PE::ParseFile(_In_ HANDLE hFile) {
 	}
 
 	// Read bytes
-	size_t szBytes = GetFileSize(hFile, NULL);
-	BYTE* pBytes = reinterpret_cast<BYTE*>(malloc(szBytes));
-	if (!szBytes || !pBytes || !ReadFile(hFile, pBytes, szBytes, NULL, NULL)) {
+	Buffer FileData;
+	FileData.Allocate(GetFileSize(hFile, NULL));
+	if (!ReadFile(hFile, FileData.Data(), FileData.Size(), NULL, NULL)) {
 		Status = NoFile;
-		return false;;
+		return false;
 	}
 
 	// DOS header
-	memcpy(&DosHeader, pBytes, sizeof(IMAGE_DOS_HEADER));
+	memcpy_s(&DosHeader, sizeof(IMAGE_DOS_HEADER), FileData.Data(), sizeof(IMAGE_DOS_HEADER));
 	if (DosHeader.e_magic != IMAGE_DOS_SIGNATURE) {
 		Status = NotPE;
-		free(pBytes);
-		szBytes = 0;
+		FileData.Release();
 		return false;
 	}
 
 	// DOS stub
 	DosStub.Allocate(DosHeader.e_lfanew - sizeof(IMAGE_DOS_HEADER));
-	if (DosStub.u64Size) memcpy(DosStub.pBytes, pBytes + sizeof(IMAGE_DOS_HEADER), DosStub.u64Size);
+	memcpy_s(DosStub.Data(), DosStub.Size(), FileData.Data() + sizeof(IMAGE_DOS_HEADER), DosStub.Size());
 
 	// NT headers
-	memcpy(&NTHeaders, pBytes + DosHeader.e_lfanew, sizeof(IMAGE_NT_HEADERS64));
+	if (DosHeader.e_lfanew + sizeof(IMAGE_NT_HEADERS64) > FileData.Size()) {
+		Status = NotPE;
+		FileData.Release();
+		return false;
+	}
+	memcpy_s(&NTHeaders, sizeof(IMAGE_NT_HEADERS64), FileData.Data() + DosHeader.e_lfanew, sizeof(IMAGE_NT_HEADERS64));
 	if (NTHeaders.Signature != IMAGE_NT_SIGNATURE) {
 		Status = NotPE;
-		free(pBytes);
-		szBytes = 0;
+		FileData.Release();
 		return false;
 	}
 	
 	// Validate architecture
 	if (NTHeaders.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64) {
 		Status = Unsupported;
-		free(pBytes);
-		szBytes = 0;
+		FileData.Release();
 		return false;
 	} else if (NTHeaders.OptionalHeader.Magic != 0x20B) {
 		Status = NotPE;
-		free(pBytes);
-		szBytes = 0;
+		FileData.Release();
 		return false;
 	}
 
+	// Clear empty data dirs
 	if (IMAGE_NUMBEROF_DIRECTORY_ENTRIES - NTHeaders.OptionalHeader.NumberOfRvaAndSizes)
-		memset(&NTHeaders.OptionalHeader.DataDirectory[NTHeaders.OptionalHeader.NumberOfRvaAndSizes], 0, sizeof(IMAGE_DATA_DIRECTORY) * (IMAGE_NUMBEROF_DIRECTORY_ENTRIES - NTHeaders.OptionalHeader.NumberOfRvaAndSizes));
+		ZeroMemory(&NTHeaders.OptionalHeader.DataDirectory[NTHeaders.OptionalHeader.NumberOfRvaAndSizes], sizeof(IMAGE_DATA_DIRECTORY) * (IMAGE_NUMBEROF_DIRECTORY_ENTRIES - NTHeaders.OptionalHeader.NumberOfRvaAndSizes));
 
-	SectionHeaders.raw.Allocate(sizeof(IMAGE_SECTION_HEADER) * NTHeaders.FileHeader.NumberOfSections);
-	SectionHeaders.nItems = NTHeaders.FileHeader.NumberOfSections;
-	memcpy(SectionHeaders.raw.pBytes, pBytes + DosHeader.e_lfanew + NTHeaders.FileHeader.SizeOfOptionalHeader + sizeof(IMAGE_FILE_HEADER) + 4, SectionHeaders.raw.u64Size);
-	
+	// Section headers
+	if (DosHeader.e_lfanew + NTHeaders.FileHeader.SizeOfOptionalHeader + sizeof(IMAGE_FILE_HEADER) + 4 + sizeof(IMAGE_SECTION_HEADER) * NTHeaders.FileHeader.NumberOfSections > FileData.Size()) {
+		Status = Corrupt;
+		FileData.Release();
+		return false;
+	} else {
+		SectionHeaders.Reserve(NTHeaders.FileHeader.NumberOfSections);
+		IMAGE_SECTION_HEADER* pHeaders = reinterpret_cast<IMAGE_SECTION_HEADER*>(FileData.Data() + DosHeader.e_lfanew + NTHeaders.FileHeader.SizeOfOptionalHeader + sizeof(IMAGE_FILE_HEADER) + 4);
+		for (int i = 0; i < NTHeaders.FileHeader.NumberOfSections; i++) SectionHeaders.Push(pHeaders[i]);
+	}
+
 	for (int i = 0; i < SectionHeaders.Size(); i++) {
-		Buffer buf = { 0 };
-		buf.Allocate(SectionHeaders[i].SizeOfRawData);
-		if (buf.u64Size) memcpy(buf.pBytes, pBytes + SectionHeaders[i].PointerToRawData, buf.u64Size);
+		Buffer buf;
+		if (SectionHeaders[i].SizeOfRawData) {
+			if (SectionHeaders[i].PointerToRawData + SectionHeaders[i].SizeOfRawData > FileData.Size()) {
+				Status = Corrupt;
+				FileData.Release();
+				return false;
+			} else {
+				buf.Allocate(SectionHeaders[i].SizeOfRawData);
+				memcpy(buf.Data(), FileData.Data() + SectionHeaders[i].PointerToRawData, buf.Size());
+			}
+		}
 		SectionData.Push(buf);
 	}
 
 	// Overlay
 	OverlayOffset = SectionHeaders[SectionHeaders.Size() - 1].PointerToRawData + SectionHeaders[SectionHeaders.Size() - 1].SizeOfRawData;
-	Overlay.Allocate(szBytes - OverlayOffset);
-	if (Overlay.u64Size) {
-		memcpy(Overlay.pBytes, pBytes + szBytes - Overlay.u64Size, Overlay.u64Size);
+	if (OverlayOffset > FileData.Size()) {
+		Status = Corrupt;
+		FileData.Release();
+		return false;
+	} else if (FileData.Size() > OverlayOffset) {
+		Overlay.Allocate(FileData.Size() - OverlayOffset);
+		memcpy(Overlay.Data(), FileData.Data() + FileData.Size() - Overlay.Size(), Overlay.Size());
 	} else {
 		OverlayOffset = 0;
 	}
 
-	// Get symbol table buffer
-	if (NTHeaders.FileHeader.PointerToSymbolTable && NTHeaders.FileHeader.NumberOfSymbols) {
-		if (NTHeaders.FileHeader.PointerToSymbolTable >= OverlayOffset) {
-			pSyms = reinterpret_cast<IMAGE_SYMBOL*>(Overlay.pBytes + NTHeaders.FileHeader.PointerToSymbolTable - OverlayOffset);
-			if (NTHeaders.FileHeader.PointerToSymbolTable - OverlayOffset + sizeof(IMAGE_SYMBOL) * NTHeaders.FileHeader.NumberOfSymbols > Overlay.u64Size) pSyms = NULL;
-		} else {
-			for (int i = 0; i < SectionHeaders.Size(); i++) {
-				if (SectionHeaders[i].SizeOfRawData && SectionHeaders[i].PointerToRawData && NTHeaders.FileHeader.PointerToSymbolTable >= SectionHeaders[i].PointerToRawData && NTHeaders.FileHeader.PointerToSymbolTable - SectionHeaders[i].PointerToRawData + sizeof(IMAGE_SYMBOL) * NTHeaders.FileHeader.NumberOfSymbols > SectionHeaders[i].PointerToRawData + SectionHeaders[i].SizeOfRawData) {
-					pSyms = reinterpret_cast<IMAGE_SYMBOL*>(SectionData[i].pBytes + NTHeaders.FileHeader.PointerToSymbolTable - SectionHeaders[i].PointerToRawData);
-				}
-			}
-		}
-	}
-
 	Status = Normal;
-	free(pBytes);
-	szBytes = 0;
+	FileData.Release();
 	return true;
 }
 
@@ -159,24 +165,21 @@ RELIB_EXPORT bool PE::ParseFile(_In_ HANDLE hFile) {
 
 RELIB_EXPORT Vector<IMAGE_IMPORT_DESCRIPTOR> PE::GetImportedDLLs() {
 	Vector<IMAGE_IMPORT_DESCRIPTOR> ret;
-	ret.bCannotBeReleased = true;
 	if (Status || !NTHeaders.OptionalHeader.DataDirectory[1].VirtualAddress || !NTHeaders.OptionalHeader.DataDirectory[1].Size) return ret;
-	Buffer buf = { 0 };
+	Buffer buf;
 	IMAGE_SECTION_HEADER Header;
 	{
 		WORD i = FindSectionByRVA(NTHeaders.OptionalHeader.DataDirectory[1].VirtualAddress);
 		buf = SectionData[i];
 		Header = SectionHeaders[i];
-		if (!buf.pBytes || !buf.u64Size || NTHeaders.OptionalHeader.DataDirectory[1].VirtualAddress + NTHeaders.OptionalHeader.DataDirectory[1].Size > Header.VirtualAddress + Header.Misc.VirtualSize) return ret;
+		if (!buf.Data() || !buf.Size() || NTHeaders.OptionalHeader.DataDirectory[1].VirtualAddress + NTHeaders.OptionalHeader.DataDirectory[1].Size - Header.VirtualAddress > buf.Size()) return ret;
 	}
 
-	ret.raw.pBytes = buf.pBytes + NTHeaders.OptionalHeader.DataDirectory[1].VirtualAddress - Header.VirtualAddress;
-	IMAGE_IMPORT_DESCRIPTOR* pTable = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(ret.raw.pBytes);
+	IMAGE_IMPORT_DESCRIPTOR* pTable = reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR*>(buf.Data() + NTHeaders.OptionalHeader.DataDirectory[1].VirtualAddress - Header.VirtualAddress);
 	IMAGE_IMPORT_DESCRIPTOR zero = { 0 };
 	for (int i = 0; NTHeaders.OptionalHeader.DataDirectory[1].Size >= i * sizeof(IMAGE_IMPORT_DESCRIPTOR); i++) {
 		if (!memcmp(&zero, &pTable[i], sizeof(IMAGE_IMPORT_DESCRIPTOR))) break;
-		ret.nItems++;
-		ret.raw.u64Size += sizeof(IMAGE_IMPORT_DESCRIPTOR);
+		ret.Push(pTable[i]);
 	}
 	return ret;
 }
@@ -237,16 +240,16 @@ RELIB_EXPORT uint64_t* PE::GetTLSCallbacks() {
 	// Getting TLS callback array
 	IMAGE_TLS_DIRECTORY64 dir = ReadRVA<IMAGE_TLS_DIRECTORY64>(TLSDataDir.VirtualAddress);
 	WORD wIndex = FindSectionByRVA(dir.AddressOfCallBacks - NTHeaders.OptionalHeader.ImageBase);
-	if (wIndex >= SectionHeaders.Size()) return NULL;
-	return reinterpret_cast<uint64_t*>(SectionData[wIndex].pBytes + dir.AddressOfCallBacks - NTHeaders.OptionalHeader.ImageBase - SectionHeaders[wIndex].VirtualAddress);
+	if (wIndex >= SectionHeaders.Size() || SectionData[wIndex].Size() - dir.AddressOfCallBacks + NTHeaders.OptionalHeader.ImageBase - SectionHeaders[wIndex].VirtualAddress < sizeof(uint64_t)) return NULL;
+	return reinterpret_cast<uint64_t*>(SectionData[wIndex].Data() + dir.AddressOfCallBacks - NTHeaders.OptionalHeader.ImageBase - SectionHeaders[wIndex].VirtualAddress);
 }
 
 RELIB_EXPORT IAT_ENTRY* PE::GetIAT() {
 	IMAGE_DATA_DIRECTORY IATDir = NTHeaders.OptionalHeader.DataDirectory[1];
 	if (!IATDir.VirtualAddress || !IATDir.Size) return NULL;
 	WORD i = FindSectionByRVA(IATDir.VirtualAddress);
-	if (i >= SectionHeaders.Size()) return NULL;
-	return reinterpret_cast<IAT_ENTRY*>(SectionData[i].pBytes + (IATDir.VirtualAddress - SectionHeaders[i].VirtualAddress));
+	if (i >= SectionHeaders.Size() || SectionData[i].Size() - (IATDir.VirtualAddress - SectionHeaders[i].VirtualAddress) < sizeof(IAT_ENTRY)) return NULL;
+	return reinterpret_cast<IAT_ENTRY*>(SectionData[i].Data() + (IATDir.VirtualAddress - SectionHeaders[i].VirtualAddress));
 }
 
 RELIB_EXPORT void PE::StripDosStub() {
@@ -278,38 +281,37 @@ RELIB_EXPORT void PE::DeleteSection(_In_ WORD wIndex) {
 	SectionData.Remove(wIndex);
 }
 
-RELIB_EXPORT void PE::OverwriteSection(_In_ WORD wIndex, _In_opt_ BYTE* pBytes, _In_opt_ size_t szBytes) {
+RELIB_EXPORT void PE::OverwriteSection(_In_ WORD wIndex, _In_opt_ Buffer Data) {
 	// Check valid index
 	if (Status || wIndex >= SectionHeaders.Size())
 		return;
 	
-	Buffer data = { 0 };
-	data.pBytes = pBytes;
-	data.u64Size = szBytes;
 	IMAGE_SECTION_HEADER Header = SectionHeaders[wIndex];
-	Header.SizeOfRawData = szBytes;
+	Header.SizeOfRawData = Data.Size();
 	SectionData[wIndex].Release();
-	SectionData[wIndex] = data;
+	SectionData[wIndex] = Data;
 	SectionHeaders[wIndex] = Header;
 }
 
-RELIB_EXPORT void PE::InsertSection(_In_ WORD wIndex, _In_opt_ BYTE* pBytes, _In_ IMAGE_SECTION_HEADER Header) {
+RELIB_EXPORT void PE::InsertSection(_In_ WORD wIndex, _In_ IMAGE_SECTION_HEADER Header, _In_opt_ Buffer* pData) {
 	if (Status || wIndex > SectionHeaders.Size())
 		return;
 
 	// Insert
-	Buffer data = { 0 };
-	data.pBytes = pBytes;
-	data.u64Size = Header.SizeOfRawData;
 	SectionHeaders.Insert(wIndex, Header);
-	SectionData.Insert(wIndex, data);
+	if (pData) {
+		SectionData.Insert(wIndex, *pData);
+	} else {
+		Buffer dud;
+		SectionData.Insert(wIndex, dud);
+	}
 	NTHeaders.FileHeader.NumberOfSections++;
 }
 
 RELIB_EXPORT void PE::FixHeaders() {
 	// DOS Header
 	DosHeader.e_magic = IMAGE_DOS_SIGNATURE;
-	DosHeader.e_lfanew = sizeof(IMAGE_DOS_HEADER) + DosStub.u64Size;
+	DosHeader.e_lfanew = sizeof(IMAGE_DOS_HEADER) + DosStub.Size();
 
 	// Set stuff
 	uint64_t Raw = DosHeader.e_lfanew + sizeof(IMAGE_NT_HEADERS64) + sizeof(IMAGE_SECTION_HEADER) * NTHeaders.FileHeader.NumberOfSections;
@@ -344,7 +346,7 @@ RELIB_EXPORT bool PE::ProduceBinary(_In_ HANDLE hFile) {
 	}
 
 	// DOS stub
-	if (DosStub.pBytes && DosStub.u64Size && !WriteFile(hFile, DosStub.pBytes, DosStub.u64Size, NULL, NULL)) {
+	if (DosStub.Data() && DosStub.Size() && !WriteFile(hFile, DosStub.Data(), DosStub.Size(), NULL, NULL)) {
 		return false;
 	}
 
@@ -354,7 +356,7 @@ RELIB_EXPORT bool PE::ProduceBinary(_In_ HANDLE hFile) {
 	}
 
 	// Section Headers
-	if (!WriteFile(hFile, SectionHeaders.raw.pBytes, SectionHeaders.Size() * sizeof(IMAGE_SECTION_HEADER), NULL, NULL)) {
+	if (!WriteFile(hFile, SectionHeaders.Data(), SectionHeaders.Size() * sizeof(IMAGE_SECTION_HEADER), NULL, NULL)) {
 		return false;
 	}
 
@@ -379,7 +381,7 @@ RELIB_EXPORT bool PE::ProduceBinary(_In_ HANDLE hFile) {
 		
 		// Write actual data (if any)
 		if (SectionHeaders[i].SizeOfRawData) {
-			if (!WriteFile(hFile, SectionData[i].pBytes, SectionHeaders[i].SizeOfRawData, NULL, NULL)) {
+			if (SectionHeaders[i].SizeOfRawData < SectionData[i].Size() || !WriteFile(hFile, SectionData[i].Data(), SectionHeaders[i].SizeOfRawData, NULL, NULL)) {
 				return false;
 			}
 			dwCurrentAddress += SectionHeaders[i].SizeOfRawData;
@@ -387,8 +389,8 @@ RELIB_EXPORT bool PE::ProduceBinary(_In_ HANDLE hFile) {
 	}
 
 	// Overlay
-	if (Overlay.u64Size && Overlay.pBytes) {
-		if (!WriteFile(hFile, Overlay.pBytes, Overlay.u64Size, NULL, NULL)) return false;
+	if (Overlay.Size() && Overlay.Data()) {
+		if (!WriteFile(hFile, Overlay.Data(), Overlay.Size(), NULL, NULL)) return false;
 	}
 
 	return true;
@@ -411,19 +413,22 @@ RELIB_EXPORT bool PE::ProduceBinary(_In_ char* sName) {
 RELIB_EXPORT Vector<DWORD> PE::GetExportedSymbolRVAs() {
 	// Get export table
 	Vector<DWORD> vec;
-	vec.bCannotBeReleased = true;
 	if (!NTHeaders.OptionalHeader.DataDirectory[0].Size || !NTHeaders.OptionalHeader.DataDirectory[0].VirtualAddress) return vec;
 	IMAGE_EXPORT_DIRECTORY ExportTable = ReadRVA<IMAGE_EXPORT_DIRECTORY>(NTHeaders.OptionalHeader.DataDirectory[0].VirtualAddress);
 	if (!ExportTable.NumberOfFunctions || !ExportTable.AddressOfFunctions || !ExportTable.AddressOfNames) return vec;
 	
-	// Copy data
+	// Prepare data
 	WORD wContainingSection = FindSectionByRVA(ExportTable.AddressOfFunctions);
 	if (wContainingSection >= SectionHeaders.Size()) return vec;
 	Buffer Data = SectionData[wContainingSection];
-	if (!Data.pBytes || !Data.u64Size || SectionHeaders[wContainingSection].SizeOfRawData - (ExportTable.AddressOfFunctions - SectionHeaders[wContainingSection].VirtualAddress) < sizeof(DWORD) * ExportTable.NumberOfFunctions) return vec;
-	vec.raw.u64Size = ExportTable.NumberOfFunctions * sizeof(DWORD);
-	vec.raw.pBytes = Data.pBytes + ExportTable.AddressOfFunctions - SectionHeaders[wContainingSection].VirtualAddress;
-	vec.nItems = ExportTable.NumberOfFunctions;
+	if (!Data.Data() || !Data.Size() || SectionHeaders[wContainingSection].SizeOfRawData - (ExportTable.AddressOfFunctions - SectionHeaders[wContainingSection].VirtualAddress) < sizeof(DWORD) * ExportTable.NumberOfFunctions) return vec;
+	DWORD offset = ExportTable.AddressOfFunctions - SectionHeaders[wContainingSection].VirtualAddress;
+
+	// Copy data
+	for (int i = 0; Data.Size() - offset >= sizeof(DWORD) && i < ExportTable.NumberOfFunctions; i++) {
+		vec.Push(*(DWORD*)(Data.Data() + offset));
+		offset += sizeof(DWORD);
+	}
 	return vec;
 }
 
@@ -438,23 +443,29 @@ RELIB_EXPORT Vector<char*> PE::GetExportedSymbolNames() {
 	WORD wContainingSection = FindSectionByRVA(ExportTable.AddressOfNames);
 	if (wContainingSection >= SectionHeaders.Size()) return vec;
 	Buffer Data = SectionData[wContainingSection];
-	if (!Data.pBytes || !Data.u64Size) return vec;
-	Data.pBytes += ExportTable.AddressOfNames - SectionHeaders[wContainingSection].VirtualAddress;
-	Data.u64Size -= (ExportTable.AddressOfNames - SectionHeaders[wContainingSection].VirtualAddress);
+	if (!Data.Data() || !Data.Size()) return vec;
+	DWORD offset = ExportTable.AddressOfNames - SectionHeaders[wContainingSection].VirtualAddress;
 	
 	// Copy data
-	for (int i = 0; Data.u64Size >= sizeof(DWORD) && i < ExportTable.NumberOfNames; i++) {
-		vec.Push(ReadRVAString(*(DWORD*)Data.pBytes));
-		Data.pBytes += sizeof(DWORD);
-		Data.u64Size -= sizeof(DWORD);
+	for (int i = 0; Data.Size() - offset >= sizeof(DWORD) && i < ExportTable.NumberOfNames; i++) {
+		vec.Push(ReadRVAString(*(DWORD*)(Data.Data() + offset)));
+		offset += sizeof(DWORD);
 	}
 	return vec;
 }
 
 RELIB_EXPORT char* PE::ReadRVAString(_In_ DWORD dwRVA) {
+	// Get string base
 	WORD wIndex = FindSectionByRVA(dwRVA);
-	if (wIndex >= SectionHeaders.Size() || !SectionData[wIndex].pBytes || !SectionData[wIndex].u64Size) return NULL;
-	return reinterpret_cast<char*>(SectionData[wIndex].pBytes + (dwRVA - SectionHeaders[wIndex].VirtualAddress));
+	if (wIndex >= SectionHeaders.Size() || !SectionData[wIndex].Data() || !SectionData[wIndex].Size()) return NULL;
+	char* buf = reinterpret_cast<char*>(SectionData[wIndex].Data() + (dwRVA - SectionHeaders[wIndex].VirtualAddress));
+	
+	// Prevent out-of-bounds strings
+	for (int i = 0; ; i++) {
+		if (!buf[i]) return buf;
+		if (i + (dwRVA - SectionHeaders[wIndex].VirtualAddress) >= SectionData[wIndex].Size()) break;
+	}
+	return NULL;
 }
 
 RELIB_EXPORT bool PE::WriteRVA(_In_ DWORD dwRVA, _In_ void* pData, _In_ size_t szData) {
@@ -465,8 +476,7 @@ RELIB_EXPORT bool PE::WriteRVA(_In_ DWORD dwRVA, _In_ void* pData, _In_ size_t s
 	}
 
 	// Write data
-	memcpy(SectionData[wSectionIndex].pBytes + (dwRVA - SectionHeaders[wSectionIndex].VirtualAddress), pData, szData);
-	return true;
+	return !memcpy_s(SectionData[wSectionIndex].Data() + (dwRVA - SectionHeaders[wSectionIndex].VirtualAddress), SectionData[wSectionIndex].Size() - (dwRVA - SectionHeaders[wSectionIndex].VirtualAddress), pData, szData);
 }
 
 RELIB_EXPORT bool PE::ReadRVA(_In_ DWORD dwRVA, _Out_ void* pData, _In_ size_t szData) {
@@ -476,35 +486,37 @@ RELIB_EXPORT bool PE::ReadRVA(_In_ DWORD dwRVA, _Out_ void* pData, _In_ size_t s
 		return false;
 	}
 
-	memcpy(pData, SectionData[wSectionIndex].pBytes + (dwRVA - SectionHeaders[wSectionIndex].VirtualAddress), szData);
-	return true;
+	if (szData <= SectionData[wSectionIndex].Size() - (dwRVA - SectionHeaders[wSectionIndex].VirtualAddress)) {
+		memcpy(pData, SectionData[wSectionIndex].Data() + (dwRVA - SectionHeaders[wSectionIndex].VirtualAddress), szData);
+		return true;
+	}
+	return false;
 }
 
 RELIB_EXPORT Vector<DWORD> PE::GetRelocations() {
 	Vector<DWORD> ret;
 	if (Status || !NTHeaders.OptionalHeader.DataDirectory[5].Size || !NTHeaders.OptionalHeader.DataDirectory[5].VirtualAddress || NTHeaders.FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED) return ret;
 	
-	WORD i;
-	Buffer sec = { 0 };
+	WORD i = FindSectionByRVA(NTHeaders.OptionalHeader.DataDirectory[5].VirtualAddress);
+	if (i >= SectionData.Size()) return ret;
+	Buffer sec = SectionData[i];
 	IMAGE_BASE_RELOCATION* pRelocation;
+	size_t offset = NTHeaders.OptionalHeader.DataDirectory[5].VirtualAddress - SectionHeaders[i].VirtualAddress;
 
-	i = FindSectionByRVA(NTHeaders.OptionalHeader.DataDirectory[5].VirtualAddress);
-	sec = SectionData[i];
-	if (sec.pBytes && sec.u64Size) {
-		sec.pBytes += (NTHeaders.OptionalHeader.DataDirectory[5].VirtualAddress - SectionHeaders[i].VirtualAddress);
-		sec.u64Size -= (NTHeaders.OptionalHeader.DataDirectory[5].VirtualAddress - SectionHeaders[i].VirtualAddress);
+	if (sec.Data() && sec.Size() && sec.Size() - offset >= sizeof(IMAGE_DATA_DIRECTORY)) {
 		WORD nOff = 0;
 
 		do {
-			pRelocation = reinterpret_cast<IMAGE_BASE_RELOCATION*>(sec.pBytes + nOff);
+			pRelocation = reinterpret_cast<IMAGE_BASE_RELOCATION*>(sec.Data() + offset + nOff);
 			if (!pRelocation->SizeOfBlock || !pRelocation->VirtualAddress) break;
 			for (int j = 0, n = (pRelocation->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD); j < n; j++) {
-				i = *reinterpret_cast<WORD*>(sec.pBytes + nOff + sizeof(IMAGE_BASE_RELOCATION) + sizeof(WORD) * j);
+				if (sec.Size() - (offset + nOff + sizeof(IMAGE_BASE_RELOCATION) + sizeof(WORD) * j) < sizeof(WORD)) return ret;
+				i = *reinterpret_cast<WORD*>(sec.Data() + offset + nOff + sizeof(IMAGE_BASE_RELOCATION) + sizeof(WORD) * j);
 				if ((i & 0b1111000000000000) != 0b1010000000000000) continue;
 				ret.Push(pRelocation->VirtualAddress + (i & 0b0000111111111111));
 			}
 			nOff += pRelocation->SizeOfBlock;
-		} while (pRelocation->SizeOfBlock && NTHeaders.OptionalHeader.DataDirectory[5].Size > nOff && sec.u64Size > nOff);
+		} while (pRelocation->SizeOfBlock && NTHeaders.OptionalHeader.DataDirectory[5].Size > nOff && sec.Size() > offset + nOff && sec.Size() - offset - nOff >= sizeof(IMAGE_BASE_RELOCATION));
 	}
 	return ret;
 }
@@ -518,47 +530,10 @@ RELIB_EXPORT DWORD PE::GetOverlayOffset() {
 	return OverlayOffset;
 }
 
-RELIB_EXPORT IMAGE_SYMBOL PE::FindSymbol(_In_ char* sName) {
-	IMAGE_SYMBOL ret = { 0 };
-	if (!pSyms || Status) return ret;
-
-	for (int i = 0; i < NTHeaders.FileHeader.NumberOfSymbols; i++) {
-		if (!pSyms[i].N.Name.Short && pSyms[i].N.Name.Long) {
-			char* str = reinterpret_cast<char*>(pSyms) + sizeof(IMAGE_SYMBOL) * NTHeaders.FileHeader.NumberOfSymbols + pSyms[i].N.Name.Long;
-			if (!lstrcmpA(sName, str)) {
-				return pSyms[i];
-			}
-		}
-	}
-
-	return ret;
-}
-
-RELIB_EXPORT Vector<char*> PE::GetSymbolNames() {
-	Vector<char*> ret;
-	if (!pSyms || Status) return ret;
-
-	ret.Reserve(NTHeaders.FileHeader.NumberOfSymbols);
-	for (int i = 0; i < NTHeaders.FileHeader.NumberOfSymbols; i++) {
-		if (!pSyms[i].N.Name.Short && pSyms[i].N.Name.Long) {
-			ret.Push(reinterpret_cast<char*>(pSyms) + sizeof(IMAGE_SYMBOL) * NTHeaders.FileHeader.NumberOfSymbols + pSyms[i].N.Name.Long);
-		}
-	}
-
-	return ret;
-}
-
-RELIB_EXPORT IMAGE_SYMBOL PE::GetSymbol(_In_ int i) {
-	IMAGE_SYMBOL ret = { 0 };
-	if (!pSyms || Status || NTHeaders.FileHeader.NumberOfSymbols <= i) return ret;
-
-	return pSyms[i];
-}
-
 RELIB_EXPORT Buffer GenerateRelocSection(_In_ Vector<DWORD> Relocations) {
-	Buffer ret = { 0 };
+	Buffer ret;
 	ret.Allocate(sizeof(IMAGE_BASE_RELOCATION));
-	IMAGE_BASE_RELOCATION* pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.pBytes);
+	IMAGE_BASE_RELOCATION* pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.Data());
 	pReloc->SizeOfBlock = sizeof(IMAGE_BASE_RELOCATION);
 	pReloc->VirtualAddress = 0;
 
@@ -572,34 +547,34 @@ RELIB_EXPORT Buffer GenerateRelocSection(_In_ Vector<DWORD> Relocations) {
 		// Generate new rva
 		if (pReloc->VirtualAddress + 0x1000 <= Relocations[i]) {
 			// Add pad
-			if (ret.u64Size % sizeof(DWORD)) {
-				ret.Allocate(ret.u64Size + sizeof(WORD));
-				pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.pBytes + RelocOff);
+			if (ret.Size() % sizeof(DWORD)) {
+				ret.Allocate(ret.Size() + sizeof(WORD));
+				pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.Data() + RelocOff);
 				pReloc->SizeOfBlock += sizeof(WORD);
-				*reinterpret_cast<WORD*>(ret.pBytes + ret.u64Size - sizeof(WORD)) = 0;
+				*reinterpret_cast<WORD*>(ret.Data() + ret.Size() - sizeof(WORD)) = 0;
 			}
 
 			// Create new thingymadoodle
-			RelocOff = ret.u64Size;
-			ret.Allocate(ret.u64Size + sizeof(IMAGE_BASE_RELOCATION));
-			pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.pBytes + RelocOff);
+			RelocOff = ret.Size();
+			ret.Allocate(ret.Size() + sizeof(IMAGE_BASE_RELOCATION));
+			pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.Data() + RelocOff);
 			pReloc->SizeOfBlock = sizeof(IMAGE_BASE_RELOCATION);
 			pReloc->VirtualAddress = Relocations[i] & ~0xFFF;
 		}
 
 		// Add entry
-		ret.Allocate(ret.u64Size + sizeof(WORD));
-		pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.pBytes + RelocOff);
+		ret.Allocate(ret.Size() + sizeof(WORD));
+		pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.Data() + RelocOff);
 		pReloc->SizeOfBlock += sizeof(WORD);
-		*reinterpret_cast<WORD*>(ret.pBytes + ret.u64Size - sizeof(WORD)) = 0b1010000000000000 | ((Relocations[i] - pReloc->VirtualAddress) & 0xFFF);
+		*reinterpret_cast<WORD*>(ret.Data() + ret.Size() - sizeof(WORD)) = 0b1010000000000000 | ((Relocations[i] - pReloc->VirtualAddress) & 0xFFF);
 	}
 
 	// Add pad
-	if (ret.u64Size % sizeof(DWORD)) {
-		ret.Allocate(ret.u64Size + sizeof(WORD));
-		pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.pBytes + RelocOff);
+	if (ret.Size() % sizeof(DWORD)) {
+		ret.Allocate(ret.Size() + sizeof(WORD));
+		pReloc = reinterpret_cast<IMAGE_BASE_RELOCATION*>(ret.Data() + RelocOff);
 		pReloc->SizeOfBlock += sizeof(WORD);
-		*reinterpret_cast<WORD*>(ret.pBytes + ret.u64Size - sizeof(WORD)) = 0;
+		*reinterpret_cast<WORD*>(ret.Data() + ret.Size() - sizeof(WORD)) = 0;
 	}
 	return ret;
 }

@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Portable executable parser definitions
  * @version 0.0.0
- * @date 2025-04-19
+ * @date 2025-05-23
  * @copyright MIT License
  */
 
@@ -15,11 +15,12 @@
  * @brief Status of PE class.
  */
 enum PEStatus_t : BYTE {
-	Normal = 0,     //!< No noticed errors
-	NotSet = 1,     //!< Parser has not been given a file
-	NoFile = 2,     //!< File provided does not exist
-	NotPE = 3,      //!< File provided is not a PE or is corrupt
-	Unsupported = 4 //!< PE is an unsupported architecture or format
+	Normal = 0,      //!< No noticed errors
+	NotSet = 1,      //!< Parser has not been given a file
+	NoFile = 2,      //!< File provided does not exist
+	NotPE = 3,       //!< File provided is not a PE or is corrupt
+	Unsupported = 4, //!< PE is an unsupported architecture or format
+	Corrupt = 5      //!< PE is corrupt or has invalid values
 };
 
 typedef struct {
@@ -33,6 +34,7 @@ typedef struct {
 /*!
  * @brief Encodes an array of relocation RVAs into a valid relocation directory.
  * @note Relocations must be sorted from least to greatest.
+ * @todo Clean this
  * 
  * @param [in] Relocations Relocation RVAs.
  * @return Raw relocation section.
@@ -45,19 +47,18 @@ RELIB_EXPORT Buffer GenerateRelocSection(_In_ Vector<DWORD> Relocations);
 class PE {
 protected:
 	DWORD OverlayOffset = 0;    //!< Raw offset of the overlay.
-	IMAGE_SYMBOL* pSyms = NULL; //!< Image symbol table.
 
 public:
 	RELIB_EXPORT PE();
 	RELIB_EXPORT virtual ~PE();
 
-	PEStatus_t Status = NotSet; //!< Status of PE.
-	Buffer DosStub = { 0 }; //!< Image DOS stub.
-	Buffer Overlay = { 0 }; //!< Image overlay.
-	Vector<Buffer> SectionData; //!< Raw data of image sections.
+	PEStatus_t Status = NotSet;                  //!< Status of PE.
+	Buffer DosStub;                              //!< Image DOS stub.
+	Buffer Overlay;                              //!< Image overlay.
+	Vector<Buffer> SectionData;                  //!< Raw data of image sections.
 	Vector<IMAGE_SECTION_HEADER> SectionHeaders; //!< Image section headers.
-	IMAGE_DOS_HEADER DosHeader = { 0 }; //!< Image DOS header.
-	IMAGE_NT_HEADERS64 NTHeaders = { 0 }; //!< Image NT headers.
+	IMAGE_DOS_HEADER DosHeader = { 0 };          //!< Image DOS header.
+	IMAGE_NT_HEADERS64 NTHeaders = { 0 };        //!< Image NT headers.
 
 	/*!
 	 * @brief Parses PE from file.
@@ -82,6 +83,7 @@ public:
 
 	/*!
 	 * @brief Retrieves the TLS callback array (can be written to/modified).
+	 * @todo Change this to Vector<uint64_t>
 	 * 
 	 * @return Pointer to TLS callback array.
 	 * @retval NULL No TLS callbacks are present or unable to retrieve.
@@ -170,19 +172,18 @@ public:
 	 * @brief Overwrite a section with new data.
 	 * 
 	 * @param [in] wIndex Index of section to overwrite.
-	 * @param [in] pBytes Bytes to be replaced with (optional).
-	 * @param [in] szBytes Size of `pBytes` (optional).
+	 * @param [in] Data Bytes to be replaced with (optional).
 	 */
-	RELIB_EXPORT void OverwriteSection(_In_ WORD wIndex, _In_opt_ BYTE* pBytes, _In_opt_ size_t szBytes);
+	RELIB_EXPORT void OverwriteSection(_In_ WORD wIndex, _In_opt_ Buffer Data);
 
 	/*!
 	 * @brief Inserts a new section.
 	 * 
 	 * @param [in] wIndex Index of section.
-	 * @param [in] pBytes Bytes of section data (optional).
 	 * @param [in] Header Section header.
+	 * @param [in] Data Bytes of section data (optional).
 	 */
-	RELIB_EXPORT void InsertSection(_In_ WORD wIndex, _In_opt_ BYTE* pBytes, _In_ IMAGE_SECTION_HEADER Header);
+	RELIB_EXPORT void InsertSection(_In_ WORD wIndex, _In_ IMAGE_SECTION_HEADER Header, _In_opt_ Buffer* pData = NULL);
 
 	/*!
 	 * @brief Finds the section containing the raw address.
@@ -200,6 +201,7 @@ public:
 
 	/*!
 	 * @brief Gets import tables.
+	 * @todo Change this to Vector<IAT_ENTRY>
 	 * 
 	 * @return Pointer to import table entries.
 	 * @retval NULL No import table or unable to retrieve imports.
@@ -300,27 +302,4 @@ public:
 	 * @return Relocation RVAs.
 	 */
 	RELIB_EXPORT Vector<DWORD> GetRelocations();
-
-	/*!
-	 * @brief Find symbol from the symbol table by name.
-	 * 
-	 * @param [in] sName Name of symbol to find.
-	 * @return Symbol info, zero-filled if not found.
-	 */
-	RELIB_EXPORT IMAGE_SYMBOL FindSymbol(_In_ char* sName);
-
-	/*!
-	 * @brief Get all symbol names.
-	 * 
-	 * @return Symbol names.
-	 */
-	RELIB_EXPORT Vector<char*> GetSymbolNames();
-
-	/*!
-	 * @brief Get symbol by index in table.
-	 * 
-	 * @param [in] i Index of symbol.
-	 * @return Symbol info, zero-filled if invalid.
-	 */
-	RELIB_EXPORT IMAGE_SYMBOL GetSymbol(_In_ int i);
 };

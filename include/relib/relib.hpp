@@ -1,9 +1,9 @@
 /*!
  * @file relib.hpp
  * @author undisassemble
- * @brief relib main include
+ * @brief ReLib main include
  * @version 0.0.0
- * @date 2025-05-16
+ * @date 2025-05-23
  * @copyright MIT License
  */
 
@@ -39,15 +39,13 @@ typedef struct _ReLibMetrics_t {
 } ReLibMetrics_t;
 
 // Internal data
-#ifdef _RELIB_INTERNAL
 RELIB_EXPORT void _BaseLogger(const char* message, ...);
-typedef struct _ReLibData_t {
+typedef struct __ReLibData_t {
 	void (__stdcall *ErrorCallback)(const char* message, ...) = _BaseLogger;
 	void (__stdcall *WarningCallback)(const char* message, ...) = _BaseLogger;
 	void (__stdcall *LoggingCallback)(const char* message, ...) = _BaseLogger;
-} ReLibData_t;
-extern ReLibData_t ReLibData;
-#endif
+} _ReLibData_t;
+extern RELIB_EXPORT _ReLibData_t _ReLibData;
 
 // Exports
 #ifdef __cplusplus
@@ -80,10 +78,15 @@ RELIB_EXPORT extern ReLibMetrics_t ReLibMetrics;
 
 /*!
  * @brief Buffer for raw data.
+ * @todo Add a flag that disables `Release()`
  */
-struct Buffer {
-	BYTE* pBytes;     //!< Pointer to raw data.
-	uint64_t u64Size; //!< Size of `pBytes`.
+class Buffer {
+private:
+	BYTE* pBytes = NULL;                 //!< Pointer to raw data.
+	size_t szBytes = 0;                  //!< Size of `pBytes`.
+
+public:
+	inline Buffer() { pBytes = NULL; szBytes = 0; }
 
 	/*!
 	 * @brief Merge with another buffer.
@@ -99,12 +102,30 @@ struct Buffer {
 	 * 
 	 * @param [in] Size Number of bytes to allocate.
 	 */
-	RELIB_EXPORT void Allocate(_In_ uint64_t Size);
+	RELIB_EXPORT void Allocate(_In_ size_t Size);
 
 	/*!
 	 * @brief Release memory used by buffer.
 	 */
 	RELIB_EXPORT void Release();
+
+	/*!
+	 * @brief Get the Data object.
+	 * 
+	 * @return Pointer to data.
+	 */
+	inline BYTE* Data() const {
+		return pBytes;
+	}
+
+	/*!
+	 * @brief Get the Size object.
+	 * 
+	 * @return Size of data.
+	 */
+	inline size_t Size() const {
+		return szBytes;
+	}
 };
 
 #ifdef __cplusplus
@@ -117,20 +138,21 @@ struct Buffer {
  * @tparam T Type of data stored.
  */
 template <typename T>
-struct Vector {
-	Buffer raw = { 0 };
-	DWORD nItems = 0;
+class Vector : public Buffer {
+protected:
+	DWORD nItems = 0;                    //!< Number of items (of type T) stored.
+
+public:
 	bool bExponentialGrowth : 1 = false; //!< Whether extra memory should be reserved when limit reached, faster on larger vectors.
-	bool bCannotBeReleased : 1 = false;  //!< When enabled `Release()` does nothing. Use if the buffer is within another memory block.
 
 	/*!
 	 * @brief Reserves additional memory.
-	 * @remark Unlike `Buffer::Allocate(_In_ uint64_t Size)`, this is cumulative and adds additional memory.
+	 * @remark Unlike `Buffer::Allocate(_In_ size_t Size)`, this is cumulative and adds additional memory.
 	 * 
-	 * @param [in] nItems Number of items to 
+	 * @param [in] nItems Number of items to reserve
 	 */
-	void Reserve(_In_ int nItems) {
-		raw.Allocate(raw.u64Size + nItems * sizeof(T));
+	inline void Reserve(_In_ size_t nItems) {
+		Allocate(Buffer::Size() + nItems * sizeof(T));
 	}
 
 	/*!
@@ -140,11 +162,11 @@ struct Vector {
 	 * @param [in] bFreeOther Don't free the other vector.
 	 */
 	void Merge(_In_ Vector<T> Other, _In_ bool bFreeOther = false) {
-		raw.u64Size = nItems * sizeof(T);
-		raw.Merge(Other.raw, false);
-		if (bFreeOther) Other.Release();
-		nItems += Other.nItems;
+		Reserve(Other.Size());
+		memcpy_s(Buffer::Data() + nItems * sizeof(T), Capacity() - nItems * sizeof(T), Other.Data(), Other.Size() * sizeof(T));
+		nItems += Other.Size();
 		ReLibMetrics.Memory.InUse += Other.nItems * sizeof(T);
+		if (bFreeOther) Other.Release();
 	}
 
 	/*!
@@ -152,7 +174,7 @@ struct Vector {
 	 * 
 	 * @return Number of items.
 	 */
-	size_t Size() {
+	inline size_t Size() const {
 		return nItems;
 	}
 
@@ -161,26 +183,22 @@ struct Vector {
 	 * 
 	 * @return Number of items.
 	 */
-	size_t Capacity() {
-		return raw.u64Size / sizeof(T);
+	inline size_t Capacity() const {
+		return Buffer::Size() / sizeof(T);
 	}
 
 	/*!
 	 * @brief Reserve memory based on number of items.
 	 */
 	void Grow() {
-		if (bCannotBeReleased) return;
-
 		// Create buffer
-		if (raw.u64Size < sizeof(T) || !raw.pBytes || !raw.u64Size) {
-			raw.Allocate(sizeof(T) * (bExponentialGrowth ? 10 : 1));
-			ZeroMemory(raw.pBytes, raw.u64Size);
+		if (Buffer::Size() < sizeof(T) || !Buffer::Data()) {
+			Allocate(sizeof(T) * (bExponentialGrowth ? 10 : 1));
 		}
 		
 		// Expand buffer
-		else if (raw.u64Size < nItems * sizeof(T)) {
-			uint64_t OldSize = raw.u64Size;
-			uint64_t NewSize = OldSize;
+		else if (Buffer::Size() < nItems * sizeof(T)) {
+			uint64_t NewSize = Buffer::Size();
 			if (bExponentialGrowth) {
 				while (NewSize < nItems * sizeof(T)) {
 					NewSize = sizeof(T) * (NewSize / sizeof(T)) * 1.1;
@@ -188,8 +206,7 @@ struct Vector {
 			} else {
 				NewSize = nItems * sizeof(T);
 			}
-			raw.Allocate(NewSize);
-			ZeroMemory(raw.pBytes + OldSize, NewSize - OldSize);
+			Allocate(NewSize);
 		}
 	}
 
@@ -199,19 +216,31 @@ struct Vector {
 	 * @param [in] i Index.
 	 * @return Item.
 	 */
-	T& At(_In_ DWORD i) {
-		// It's better for this to crash than give bad data
-		return ((T*)raw.pBytes)[i];
+	T& At(_In_ DWORD i) const {
+		// Yeah idk what the fuck I was talking about when I wrote that comment, dont check git history please, thanks.
+		if (i >= nItems) {
+			_ReLibData.ErrorCallback("Attempted to access out-of-bounds data\n");
+			DebugBreak();
+			exit(1);
+		} else {
+			return ((T*)Data())[i];
+		}
 	}
 
 	/*!
-	 * @brief Get item at index i.
+	 * @brief Get/set item at index i.
 	 * 
 	 * @param [in] i Index.
 	 * @return Item.
 	 */
 	T& operator[](_In_ int i) {
-		return ((T*)raw.pBytes)[i];
+		if (i >= nItems) {
+			_ReLibData.ErrorCallback("Attempted to access out-of-bounds data\n");
+			DebugBreak();
+			exit(1);
+		} else {
+			return ((T*)Data())[i];
+		}
 	}
 
 	/*!
@@ -221,7 +250,13 @@ struct Vector {
 	 * @return Item.
 	 */
 	const T& operator[](_In_ int i) const {
-		return ((T*)raw.pBytes)[i];
+		if (i >= nItems) {
+			_ReLibData.ErrorCallback("Attempted to access out-of-bounds data\n");
+			DebugBreak();
+			exit(1);
+		} else {
+			return ((T*)Data())[i];
+		}
 	}
 
 	/*!
@@ -230,22 +265,10 @@ struct Vector {
 	 * @param [in] Item Item to push.
 	 */
 	void Push(_In_ T Item) {
-		if (bCannotBeReleased) return;
 		nItems++;
 		Grow();
-		memcpy(raw.pBytes + (nItems - 1) * sizeof(T), &Item, sizeof(T));
+		operator[](nItems - 1) = Item;
 		ReLibMetrics.Memory.InUse += sizeof(T);
-	}
-
-	/*!
-	 * @brief Push vector of items to end of vector.
-	 * 
-	 * @param [in] Items Items to push.
-	 */
-	void Push(_In_ Vector<T> Items) {
-		for (int i = 0; i < Items.Size(); i++) {
-			Push(Items[i]);
-		}
 	}
 
 	/*!
@@ -254,7 +277,7 @@ struct Vector {
 	 * @return Popped item.
 	 */
 	T Pop() {
-		if (!raw.u64Size || !raw.pBytes || bCannotBeReleased) {
+		if (!Buffer::Size() || !Buffer::Data()) {
 			T ret;
 			ZeroMemory(&ret, sizeof(T));
 			return ret;
@@ -270,19 +293,6 @@ struct Vector {
 	}
 
 	/*!
-	 * @brief Replace item at index i.
-	 * @deprecated Use `operator[]` instead.
-	 * 
-	 * @param [in] i Index of item to replace.
-	 * @param [in] Item Item to replace it with.
-	 */
-	void Replace(_In_ DWORD i, _In_ T Item) {
-		if (i < Size()) {
-			((T*)raw.pBytes)[i] = Item;
-		}
-	}
-
-	/*!
 	 * @brief Replace single element with vector.
 	 * 
 	 * @param [in] i Index to replace.
@@ -290,14 +300,10 @@ struct Vector {
 	 */
 	void Replace(_In_ DWORD i, _In_ Vector<T> Items) {
 		if (!Items.Size() || i >= Size()) return;
-		Replace(i, Items[0]);
-		Items.nItems--;
-		Items.raw.pBytes += sizeof(T);
-		Items.raw.u64Size -= sizeof(T);
-		Insert(i + 1, Items);
-		Items.raw.u64Size += sizeof(T);
-		Items.raw.pBytes -= sizeof(T);
-		Items.nItems++;
+		Reserve(Items.Size());
+		memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i) * sizeof(T));
+		memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T));
+		ReLibMetrics.Memory.InUse += (Items.Size() - 1) * sizeof(T);
 	}
 
 	/*!
@@ -306,21 +312,17 @@ struct Vector {
 	 * @param [in] i Index to begin replacement.
 	 * @param [in] Items Items to replace with.
 	 */
-	void Overwrite(_In_ DWORD i, _In_ Vector<T> Items) {
-		for (int j = 0; j < Items.Size() && i < Size(); j++ && i++) {
-			((T*)raw.pBytes)[i] = Items[j];
-		}
+	inline void Overwrite(_In_ DWORD i, _In_ Vector<T> Items) {
+		memcpy_s(Buffer::Data() + sizeof(T) * i, Buffer::Size() - sizeof(T) * i, Items.Data(), Items.Size() * sizeof(T));
 	}
 
 	/*!
 	 * @brief Release memory being used.
 	 */
 	void Release() {
-		if (!bCannotBeReleased) {
-			raw.Release();
-			ReLibMetrics.Memory.InUse -= sizeof(T) * nItems;
-			nItems = 0;
-		}
+		Buffer::Release();
+		ReLibMetrics.Memory.InUse -= sizeof(T) * nItems;
+		nItems = 0;
 	}
 
 	/*!
@@ -330,7 +332,7 @@ struct Vector {
 	 * @param [in] Item Item to be inserted.
 	 */
 	void Insert(_In_ DWORD i, _In_ T Item) {
-		if (i > Size() || bCannotBeReleased) return;
+		if (i > Size()) return;
 		if (i == Size()) {
 			Push(Item);
 			return;
@@ -339,10 +341,10 @@ struct Vector {
 		Grow();
 
 		// Shift memory
-		memmove(raw.pBytes + (i + 1) * sizeof(T), raw.pBytes + i * sizeof(T), (nItems - i - 1) * sizeof(T));
+		memmove_s(Buffer::Data() + (i + 1) * sizeof(T), Buffer::Size() - (i + 1) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i - 1) * sizeof(T));
 		
 		// Insert item
-		Replace(i, Item);
+		operator[](i) = Item;
 	}
 
 	/*!
@@ -352,21 +354,22 @@ struct Vector {
 	 * @param [in] Items Items to be inserted.
 	 */
 	void Insert(_In_ DWORD i, _In_ Vector<T> Items) {
-		if (i > Size() || bCannotBeReleased) return;
+		if (i > Size()) return;
 
 		// Size stuff
-		nItems += Items.nItems;
+		nItems += Items.Size();
 		Grow();
 
 		// Add to end
 		if (i == Size()) {
-			memcpy(raw.pBytes + i * sizeof(T), Items.raw.pBytes, Items.nItems * sizeof(T));
+			Merge(Items);
 		}
 
 		// Shift and insert
 		else {
-			memmove(raw.pBytes + (i + Items.nItems) * sizeof(T), raw.pBytes + i * sizeof(T), (nItems - i - Items.nItems) * sizeof(T));
-			memcpy(raw.pBytes + i * sizeof(T), Items.raw.pBytes, Items.nItems * sizeof(T));
+			memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i - Items.Size()) * sizeof(T));
+			memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T));
+			ReLibMetrics.Memory.InUse += Items.Size() * sizeof(T);
 		}
 	}
 
@@ -376,8 +379,8 @@ struct Vector {
 	 * @param [in] i Index to remove item from.
 	 */
 	void Remove(_In_ DWORD i) {
-		if (!raw.u64Size || !raw.pBytes || i >= Size() || bCannotBeReleased) return;
-		memcpy(raw.pBytes + sizeof(T) * i, raw.pBytes + sizeof(T) * (i + 1), (nItems * sizeof(T)) - sizeof(T) * (i + 1));
+		if (!Buffer::Data() || !Buffer::Size() || i >= Size()) return;
+		memcpy_s(Buffer::Data() + sizeof(T) * i, Buffer::Size() - sizeof(T) * i, Buffer::Data() + sizeof(T) * (i + 1), (nItems * sizeof(T)) - sizeof(T) * (i + 1));
 		nItems--;
 		ReLibMetrics.Memory.InUse -= sizeof(T);
 	}
@@ -389,9 +392,9 @@ struct Vector {
 	 * @return Index of item.
 	 * @retval -1 Not found.
 	 */
-	int Find(_In_ T Item) {
+	int Find(_In_ T Item) const {
 		for (int i = 0, n = Size(); i < n; i++) {
-			if (!memcmp(&Item, &((T*)raw.pBytes)[i], sizeof(T))) return i;
+			if (!memcmp(&Item, &operator[](i), sizeof(T))) return i;
 		}
 		return -1;
 	}
@@ -403,7 +406,7 @@ struct Vector {
 	 * @retval true Present.
 	 * @retval false Not present.
 	 */
-	bool Includes(_In_ T Item) {
+	inline bool Includes(_In_ T Item) const {
 		return Find(Item) >= 0;
 	}
 };

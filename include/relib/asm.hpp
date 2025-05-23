@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-05-16
+ * @date 2025-05-23
  * @copyright MIT License
  * @bug Crashes due to `_pei386_runtime_relocator`.
  */
@@ -107,6 +107,7 @@ struct Line {
 			bool IsAbs;                     //!< Whether the pointer is an absolute address or an RVA, use `Abs` if true and `RVA` if false.
 		} Pointer;
 	};
+	Line() { RawInsert = Buffer(); }
 };
 
 /*!
