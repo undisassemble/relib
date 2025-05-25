@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-05-23
+ * @date 2025-05-25
  * @copyright MIT License
  */
 
@@ -178,12 +178,10 @@ RELIB_EXPORT Asm::Asm() : PE() {}
 RELIB_EXPORT Asm::Asm(_In_ char* sFileName) : PE(sFileName) {
 	if (Status) return;
 	ZydisDecoderInit(&Decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
-	Vector<Line> lines;
-	lines.bExponentialGrowth = true;
 	AsmSection sec = { 0 };
 	for (int i = 0; i < SectionHeaders.Size(); i++) {
-		sec.Lines = reinterpret_cast<Vector<Line>*>(malloc(sizeof(Vector<Line>)));
-		memcpy_s(sec.Lines, sizeof(Vector<Line>), &lines, sizeof(Vector<Line>));
+		sec.Lines = new Vector<Line>;
+		sec.Lines->bExponentialGrowth = true;
 		sec.OldRVA = SectionHeaders[i].VirtualAddress;
 		sec.OldSize = SectionHeaders[i].Misc.VirtualSize;
 		Sections.Push(sec);
@@ -192,12 +190,10 @@ RELIB_EXPORT Asm::Asm(_In_ char* sFileName) : PE(sFileName) {
 
 RELIB_EXPORT Asm::Asm(_In_ HANDLE hFile) : PE(hFile) {
 	ZydisDecoderInit(&Decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
-	Vector<Line> lines;
-	lines.bExponentialGrowth = true;
 	AsmSection sec = { 0 };
 	for (int i = 0; i < SectionHeaders.Size(); i++) {
-		sec.Lines = reinterpret_cast<Vector<Line>*>(malloc(sizeof(Vector<Line>)));
-		memcpy_s(sec.Lines, sizeof(Vector<Line>), &lines, sizeof(Vector<Line>));
+		sec.Lines = new Vector<Line>;
+		sec.Lines->bExponentialGrowth = true;
 		sec.NewRVA = sec.OldRVA = SectionHeaders[i].VirtualAddress;
 		sec.OldSize = SectionHeaders[i].Misc.VirtualSize;
 		Sections.Push(sec);
@@ -207,7 +203,7 @@ RELIB_EXPORT Asm::Asm(_In_ HANDLE hFile) : PE(hFile) {
 RELIB_EXPORT Asm::~Asm() {
 	for (int i = 0; i < Sections.Size(); i++) if (Sections[i].Lines) {
 		Sections[i].Lines->Release();
-		free(Sections[i].Lines);
+		delete Sections[i].Lines;
 	}
 	Sections.Release();
 	JumpTables.Release();
@@ -253,9 +249,10 @@ RELIB_EXPORT DWORD Asm::FindSectionIndex(_In_ DWORD dwRVA) {
 RELIB_EXPORT DWORD Asm::FindIndex(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
 	if (dwSec > Sections.Size()) return _UI32_MAX;
 	Vector<Line>* Lines = Sections[dwSec].Lines;
+	RELIB_ASSERT(Lines != NULL);
 
 	// If no lines exist, it will just be the first line
-	if (!Lines || !Lines->Size())
+	if (!Lines->Size())
 		return _UI32_MAX;
 
 	// Check bounds
@@ -305,7 +302,9 @@ RELIB_EXPORT DWORD Asm::FindIndex(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
 }
 
 RELIB_EXPORT DWORD Asm::FindPosition(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
+	if (dwSec >= Sections.Size()) return _UI32_MAX;
 	Vector<Line>* Lines = Sections[dwSec].Lines;
+	RELIB_ASSERT(Lines != NULL);
 
 	// If no lines exist, it will just be the first line
 	if (!Lines->Size())
@@ -330,9 +329,15 @@ RELIB_EXPORT DWORD Asm::FindPosition(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
 		if (i == _UI32_MAX) break;
 
 		if (dwRVA >= Lines->At(i).OldRVA + GetLineSize(Lines->At(i))) {
+			// After end
+			DWORD next = GetNextOriginal(dwSec, i + 1);
+			if (i == Lines->Size() - 1 || next == _UI32_MAX) {
+				return Lines->Size();
+			}
+			
 			// In between
-			if (dwRVA < Lines->At(GetNextOriginal(dwSec, i + 1)).OldRVA) {
-				return GetNextOriginal(dwSec, i + 1);
+			if (dwRVA < Lines->At(next).OldRVA) {
+				return next;
 			}
 
 			// Shift range
@@ -340,8 +345,9 @@ RELIB_EXPORT DWORD Asm::FindPosition(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
 		}
 
 		else if (dwRVA < Lines->At(i).OldRVA) {
-			// In between
-			if (dwRVA > Lines->At(GetPrevOriginal(dwSec, i - 1)).OldRVA + GetLineSize(Lines->At(GetPrevOriginal(dwSec, i - 1)))) {
+			// Before first || in between prev
+			DWORD prev = GetPrevOriginal(dwSec, i - 1);
+			if (prev == _UI32_MAX || !i || dwRVA > Lines->At(prev).OldRVA + GetLineSize(Lines->At(prev))) {
 				return i;
 			}
 
@@ -387,6 +393,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 			return false;
 		}
 		Lines = Sections[SectionIndex].Lines;
+		RELIB_ASSERT(Lines != NULL);
 		Buffer RawBytes;
 		{
 			RawBytes = SectionData[FindSectionByRVA(dwRVA)];
@@ -493,7 +500,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 			if (IsInstructionCF(CraftedLine.Decoded.Instruction.mnemonic)) {
 				// Calculate absolute address
 				if (!((CraftedLine.Decoded.Operands[0].type != ZYDIS_OPERAND_TYPE_MEMORY && CraftedLine.Decoded.Operands[0].type != ZYDIS_OPERAND_TYPE_IMMEDIATE) || (CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_MEMORY && (CraftedLine.Decoded.Operands[0].mem.base != ZYDIS_REGISTER_RIP && CraftedLine.Decoded.Operands[0].mem.base != ZYDIS_REGISTER_NONE)))) {
-					uint64_t u64Referencing;
+					uint64_t u64Referencing = 0;
 					if (ZYAN_FAILED(ZydisCalcAbsoluteAddress(&Instruction, &Operands[0], CraftedLine.OldRVA, &u64Referencing))) {
 						_ReLibData.ErrorCallback("Failed to disassemble instruction at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + CraftedLine.OldRVA);
 						TempLines.Release();
@@ -522,35 +529,43 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 							insert.OldRVA = u64Referencing;
 							u64Referencing = ReadRVA<uint64_t>(u64Referencing);
 							if (!u64Referencing) {
-								_ReLibData.WarningCallback("Failed to retrieve address at 0x%p\n", u64Referencing);
+								_ReLibData.WarningCallback("Failed to retrieve address at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + insert.OldRVA);
 								u64Referencing = 0;
-							}
-							
-							// Insert address
-							insert.Type = Pointer;
-							insert.Pointer.IsAbs = true;
-							insert.Pointer.Abs = u64Referencing;
-							{
-								WORD wInsertAt = FindPosition(wContainingIndex, insert.OldRVA);
-								if (wInsertAt == _UI16_MAX) {
-									_ReLibData.WarningCallback("Failed to find position to insert line at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + insert.OldRVA);
-								} else if (wInsertAt != _UI16_MAX - 1) {
-									Sections[wContainingIndex].Lines->Insert(wInsertAt, insert);
+							} else if (u64Referencing < NTHeaders.OptionalHeader.ImageBase) {
+								_ReLibData.WarningCallback("Skipping ref at 0x%p, possibly imported?\n", NTHeaders.OptionalHeader.ImageBase + insert.OldRVA);
+								u64Referencing = 0;
+							} else {
+								// Insert address
+								insert.Type = Pointer;
+								insert.Pointer.IsAbs = true;
+								insert.Pointer.Abs = u64Referencing;
+								{
+									WORD wInsertAt = FindPosition(wContainingIndex, insert.OldRVA);
+									if (wInsertAt == _UI16_MAX) {
+										_ReLibData.WarningCallback("Failed to find position to insert line at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + insert.OldRVA);
+									} else if (wInsertAt != _UI16_MAX - 1) {
+										Sections[wContainingIndex].Lines->Insert(wInsertAt, insert);
+									}
 								}
-							}
 
-							u64Referencing -= NTHeaders.OptionalHeader.ImageBase;
+								u64Referencing -= NTHeaders.OptionalHeader.ImageBase;
+							}
 						}
 					}
 
 					if (u64Referencing) {
 						// Disassemble the address (if good)
-						IMAGE_SECTION_HEADER Header = SectionHeaders[FindSectionByRVA(u64Referencing)];
-						if (Header.Characteristics & IMAGE_SCN_MEM_EXECUTE && Header.SizeOfRawData > u64Referencing - Header.VirtualAddress) {
-							if (!ToDisasm.Includes(u64Referencing)) {
-								ToDisasm.Push(u64Referencing);
-								if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_CALL && !Functions.Includes(u64Referencing)) {
-									Functions.Push(u64Referencing);
+						WORD wIndex = FindSectionByRVA(u64Referencing);
+						if (wIndex >= SectionHeaders.Size()) {
+							_ReLibData.WarningCallback("Failed to find section containing address 0x%p\n", NTHeaders.OptionalHeader.ImageBase + u64Referencing);
+						} else {
+							IMAGE_SECTION_HEADER Header = SectionHeaders[wIndex];
+							if (Header.Characteristics & IMAGE_SCN_MEM_EXECUTE && Header.SizeOfRawData > u64Referencing - Header.VirtualAddress) {
+								if (!ToDisasm.Includes(u64Referencing)) {
+									ToDisasm.Push(u64Referencing);
+									if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_CALL && !Functions.Includes(u64Referencing)) {
+										Functions.Push(u64Referencing);
+									}
 								}
 							}
 						}
@@ -607,6 +622,7 @@ RELIB_EXPORT bool Asm::CheckRuntimeFunction(_In_ RUNTIME_FUNCTION* pFunc, _In_ b
 		// Scope table
 		Vector<C_SCOPE_TABLE> Tables;
 		DWORD TableSize = ReadRVA<DWORD>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD));
+		if (!TableSize) return true;
 		if (Tables.Size() > 10) {
 			_ReLibData.WarningCallback("Exception handler at 0x%p had more than 10 tables, skipping\n", NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData);
 			return true;
@@ -799,18 +815,27 @@ RELIB_EXPORT bool Asm::Disassemble() {
 	}
 	_ReLibData.LoggingCallback("Disassembled Entry Point (0x%p)\n", NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.AddressOfEntryPoint);
 
-	// Error check (TEMPORARY)
-#ifdef _DEBUG
-	{
-		Vector<Line>* Lines = Sections[FindSectionIndex(NTHeaders.OptionalHeader.AddressOfEntryPoint)].Lines;
-		for (size_t i = 0; i < Lines->Size() - 1; i++) {
-			if (Lines->At(i).OldRVA + GetLineSize(Lines->At(i)) > Lines->At(i + 1).OldRVA) {
-				_ReLibData.ErrorCallback("Peepee poopoo (0x%p + %u -> 0x%p)\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(i).OldRVA, GetLineSize(Lines->At(i)), NTHeaders.OptionalHeader.ImageBase + Lines->At(i + 1).OldRVA);
-				return false;
+	// Error check
+	for (size_t i = 0; i < Sections.Size(); i++) {
+		if (Sections[i].OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
+			_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Sections[i].OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
+			return false;
+		}
+		Vector<Line>* Lines = Sections[i].Lines;
+		RELIB_ASSERT(Lines != NULL);
+		if (Lines) {
+			for (size_t j = 0; j < Lines->Size(); j++) {
+				if (Lines->At(j).OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
+					_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
+					return false;
+				}
+				if (j < Lines->Size() - 1 && Lines->At(j).OldRVA + GetLineSize(Lines->At(j)) > Lines->At(j + 1).OldRVA) {
+					_ReLibData.ErrorCallback("Validation failed, 0x%p + %u > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, GetLineSize(Lines->At(j)), NTHeaders.OptionalHeader.ImageBase + Lines->At(j + 1).OldRVA);
+					return false;
+				}
 			}
 		}
 	}
-#endif
 
 	// Disassemble TLS callbacks
 	uint64_t* pCallbacks = GetTLSCallbacks();
@@ -833,6 +858,8 @@ RELIB_EXPORT bool Asm::Disassemble() {
 			}
 			_ReLibData.LoggingCallback("Disassembled exported function \'%s\'\n", ExportNames[i]);
 		}
+		Exports.Release();
+		ExportNames.Release();
 	}
 	_ReLibData.LoggingCallback("Disassembled Exports\n");
 
@@ -868,6 +895,7 @@ RELIB_EXPORT bool Asm::Disassemble() {
 	Line line;
 	_ReLibData.LoggingCallback("Filling gaps\n");
 	for (int i = 0; i < Sections.Size(); i++) {
+		RELIB_ASSERT(Sections[i].Lines != NULL);
 		_ReLibData.LoggingCallback("Filling section %.8s (%llu lines)\n", SectionHeaders[i].Name, Sections[i].Lines->Size());
 
 		// Incase section holds no lines
@@ -1033,6 +1061,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 		// Prepare next section
 		AsmSection section = Sections[SecIndex];
 		pLines = section.Lines;
+		RELIB_ASSERT(pLines != NULL);
 		section.NewRVA = pAsm->offset() + SectionHeaders[0].VirtualAddress;
 		DWORD rva = section.NewRVA;
 		section.NewRawSize = 0;
@@ -1417,6 +1446,7 @@ RELIB_EXPORT void Asm::DeleteSection(_In_ WORD wIndex) {
 RELIB_EXPORT DWORD Asm::GetAssembledSize(_In_ DWORD SectionIndex) {
 	DWORD dwSize = 0;
 	Vector<Line>* Lines = Sections[SectionIndex].Lines;
+	RELIB_ASSERT(Lines != NULL);
 	for (DWORD i = 0; i < Lines->Size(); i++) {
 		dwSize += GetLineSize(Lines->At(i));
 	}
@@ -1424,7 +1454,9 @@ RELIB_EXPORT DWORD Asm::GetAssembledSize(_In_ DWORD SectionIndex) {
 }
 
 RELIB_EXPORT void Asm::InsertLine(_In_ DWORD SectionIndex, _In_ DWORD LineIndex, _In_ Line line) {
-	if (SectionIndex >= Sections.Size() || LineIndex > Sections[SectionIndex].Lines->Size()) return;
+	if (SectionIndex >= Sections.Size()) return;
+	RELIB_ASSERT(Sections[SectionIndex].Lines != NULL);
+	if (LineIndex > Sections[SectionIndex].Lines->Size()) return;
 	Sections[SectionIndex].Lines->Insert(LineIndex, line);
 }
 
@@ -1447,6 +1479,7 @@ RELIB_EXPORT DWORD Asm::TranslateOldAddress(_In_ DWORD dwRVA) {
 		_ReLibData.ErrorCallback("Failed to translate address 0x%p\n", NTHeaders.OptionalHeader.ImageBase + dwRVA);
 		return 0;
 	}
+	RELIB_ASSERT(Sections[SecIndex].Lines != NULL);
 	if (szIndex < Sections[SecIndex].Lines->Size()) {
 		return dwRVA + Sections[SecIndex].Lines->At(szIndex).NewRVA - Sections[SecIndex].Lines->At(szIndex).OldRVA;
 	}
@@ -1491,7 +1524,6 @@ RELIB_EXPORT void Asm::RemoveData(_In_ DWORD dwRVA, _In_ DWORD dwSize) {
 
 RELIB_EXPORT Vector<FunctionRange> Asm::GetDisassembledFunctionRanges() {
 	Vector<FunctionRange> clone = FunctionRanges;
-	//clone.bCannotBeReleased = true;
 	return clone;
 }
 
@@ -1510,7 +1542,7 @@ RELIB_EXPORT DWORD GetLineSize(_In_ const Line& line) {
 	case Pointer:
 		return (line.Pointer.IsAbs ? sizeof(uint64_t) : sizeof(DWORD));
 	}
-	_ReLibData.ErrorCallback("Failed to calculate length of instruction (unknown type)\n");
+	_ReLibData.WarningCallback("Failed to calculate length of instruction (unknown type), type value of %hhd\n", line.Type);
 	return 0;
 }
 

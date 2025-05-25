@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief ReLib core functions
  * @version 0.0.0
- * @date 2025-05-23
+ * @date 2025-05-25
  * @copyright MIT License
  */
 
@@ -12,36 +12,37 @@
 #include <stdlib.h>
 
 RELIB_EXPORT ReLibMetrics_t ReLibMetrics;
-_ReLibData_t RELIB_EXPORT _ReLibData;
+RELIB_EXPORT _ReLibData_t _ReLibData;
 
 RELIB_EXPORT void Buffer::Merge(_In_ Buffer Other, _In_ bool bFreeOther) {
     if (!Other.pBytes || !Other.szBytes) {
         return;
     } else if (!pBytes || !szBytes) {
         Allocate(Other.Size());
-        memcpy_s(pBytes, szBytes, Other.Data(), Other.Size());
+        RELIB_ASSERT(!memcpy_s(pBytes, szBytes, Other.Data(), Other.Size()));
     } else {
         Allocate(szBytes + Other.szBytes);
         memcpy(pBytes + szBytes - Other.szBytes, Other.pBytes, Other.szBytes);
-        if (bFreeOther) {
-            Other.Release();
-        }
+    }
+    if (bFreeOther) {
+        Other.Release();
     }
 }
 
 RELIB_EXPORT void Buffer::Allocate(_In_ size_t Size) {
-	if (!Size) {
+	if (Size == szBytes) return;
+    if (!Size) {
 		Release();
 		return;
 	}
-	ReLibMetrics.Memory.Reserved += Size - szBytes;
+    size_t szToZero = 0;
+    if (szBytes < Size) szToZero = Size - szBytes;
+	ReLibMetrics.Memory.Reserved += Size;
+    ReLibMetrics.Memory.InUse -= szBytes;
 	szBytes = Size;
 	pBytes = reinterpret_cast<BYTE*>(realloc(pBytes, szBytes));
-    if (!pBytes) {
-        _ReLibData.ErrorCallback("Failed to allocate memory (requested %llu bytes)\n", szBytes);
-        DebugBreak();
-        exit(1);
-    }
+    RELIB_ASSERT(pBytes != NULL);
+    ZeroMemory(pBytes + szBytes - szToZero, szToZero);
 }
 
 RELIB_EXPORT void Buffer::Release() {

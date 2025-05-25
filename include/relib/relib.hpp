@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief ReLib main include
  * @version 0.0.0
- * @date 2025-05-23
+ * @date 2025-05-25
  * @copyright MIT License
  */
 
@@ -27,6 +27,17 @@ typedef uint64_t QWORD;
 #define RELIB_EXPORT
 #endif
 
+// Its 1 in the morning, I've ha d to fully recompile the entirety of YAP 6 times to try and get cmake t ocut out the ufll path for this shit to work, so fuck you, you're not getting file information. line and debugger info shojdl e pleyny. im going to sleep. also fuck gcc fo including the ull path and not just the file name.
+#define __RELIB_ASSERT(expr, line) if (!(expr)) { _ReLibData.ErrorCallback("Assertion (" #expr ") failed at line " #line "\n"); DebugBreak(); exit(1); }
+#define _RELIB_ASSERT(expr, line) __RELIB_ASSERT(expr, line)
+
+/*!
+ * @brief Ensures expression `expr` is true, exits if it's not.
+ * 
+ * @param [in] expr Expression to check.
+ */
+#define RELIB_ASSERT(expr) _RELIB_ASSERT(expr, __LINE__)
+
 /*!
  * @brief Data about what relib is doing
  * @todo Ensure this is threadsafe
@@ -45,12 +56,9 @@ typedef struct __ReLibData_t {
 	void (__stdcall *WarningCallback)(const char* message, ...) = _BaseLogger;
 	void (__stdcall *LoggingCallback)(const char* message, ...) = _BaseLogger;
 } _ReLibData_t;
-extern RELIB_EXPORT _ReLibData_t _ReLibData;
+RELIB_EXPORT extern _ReLibData_t _ReLibData;
 
 // Exports
-#ifdef __cplusplus
-extern "C" {
-#endif
 namespace relib {
 	/*!
 	 * @brief Set callback for error reporting.
@@ -128,10 +136,6 @@ public:
 	}
 };
 
-#ifdef __cplusplus
-}
-#endif
-
 /*!
  * @brief List it items.
  * 
@@ -163,7 +167,8 @@ public:
 	 */
 	void Merge(_In_ Vector<T> Other, _In_ bool bFreeOther = false) {
 		Reserve(Other.Size());
-		memcpy_s(Buffer::Data() + nItems * sizeof(T), Capacity() - nItems * sizeof(T), Other.Data(), Other.Size() * sizeof(T));
+		RELIB_ASSERT(Buffer::Size() > nItems * sizeof(T));
+		RELIB_ASSERT(!memcpy_s(Buffer::Data() + nItems * sizeof(T), Buffer::Size() - nItems * sizeof(T), Other.Data(), Other.Size() * sizeof(T)));
 		nItems += Other.Size();
 		ReLibMetrics.Memory.InUse += Other.nItems * sizeof(T);
 		if (bFreeOther) Other.Release();
@@ -171,6 +176,7 @@ public:
 
 	/*!
 	 * @brief Number of items in the vector.
+	 * @todo Rename to `Count()`.
 	 * 
 	 * @return Number of items.
 	 */
@@ -216,15 +222,10 @@ public:
 	 * @param [in] i Index.
 	 * @return Item.
 	 */
-	T& At(_In_ DWORD i) const {
+	T& At(_In_ DWORD i) {
 		// Yeah idk what the fuck I was talking about when I wrote that comment, dont check git history please, thanks.
-		if (i >= nItems) {
-			_ReLibData.ErrorCallback("Attempted to access out-of-bounds data\n");
-			DebugBreak();
-			exit(1);
-		} else {
-			return ((T*)Data())[i];
-		}
+		RELIB_ASSERT(i < nItems);
+		return ((T*)Data())[i];
 	}
 
 	/*!
@@ -234,13 +235,8 @@ public:
 	 * @return Item.
 	 */
 	T& operator[](_In_ int i) {
-		if (i >= nItems) {
-			_ReLibData.ErrorCallback("Attempted to access out-of-bounds data\n");
-			DebugBreak();
-			exit(1);
-		} else {
-			return ((T*)Data())[i];
-		}
+		RELIB_ASSERT(i < nItems);
+		return ((T*)Data())[i];
 	}
 
 	/*!
@@ -250,13 +246,8 @@ public:
 	 * @return Item.
 	 */
 	const T& operator[](_In_ int i) const {
-		if (i >= nItems) {
-			_ReLibData.ErrorCallback("Attempted to access out-of-bounds data\n");
-			DebugBreak();
-			exit(1);
-		} else {
-			return ((T*)Data())[i];
-		}
+		RELIB_ASSERT(i < nItems);
+		return ((T*)Data())[i];
 	}
 
 	/*!
@@ -301,8 +292,8 @@ public:
 	void Replace(_In_ DWORD i, _In_ Vector<T> Items) {
 		if (!Items.Size() || i >= Size()) return;
 		Reserve(Items.Size());
-		memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i) * sizeof(T));
-		memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T));
+		RELIB_ASSERT(!memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i) * sizeof(T)));
+		RELIB_ASSERT(!memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T)));
 		ReLibMetrics.Memory.InUse += (Items.Size() - 1) * sizeof(T);
 	}
 
@@ -313,7 +304,7 @@ public:
 	 * @param [in] Items Items to replace with.
 	 */
 	inline void Overwrite(_In_ DWORD i, _In_ Vector<T> Items) {
-		memcpy_s(Buffer::Data() + sizeof(T) * i, Buffer::Size() - sizeof(T) * i, Items.Data(), Items.Size() * sizeof(T));
+		RELIB_ASSERT(!memcpy_s(Buffer::Data() + sizeof(T) * i, Buffer::Size() - sizeof(T) * i, Items.Data(), Items.Size() * sizeof(T)));
 	}
 
 	/*!
@@ -341,7 +332,7 @@ public:
 		Grow();
 
 		// Shift memory
-		memmove_s(Buffer::Data() + (i + 1) * sizeof(T), Buffer::Size() - (i + 1) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i - 1) * sizeof(T));
+		RELIB_ASSERT(!memmove_s(Buffer::Data() + (i + 1) * sizeof(T), Buffer::Size() - (i + 1) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i - 1) * sizeof(T)));
 		
 		// Insert item
 		operator[](i) = Item;
@@ -367,8 +358,8 @@ public:
 
 		// Shift and insert
 		else {
-			memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i - Items.Size()) * sizeof(T));
-			memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T));
+			RELIB_ASSERT(!memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i - Items.Size()) * sizeof(T)));
+			RELIB_ASSERT(!memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T)));
 			ReLibMetrics.Memory.InUse += Items.Size() * sizeof(T);
 		}
 	}
@@ -380,7 +371,7 @@ public:
 	 */
 	void Remove(_In_ DWORD i) {
 		if (!Buffer::Data() || !Buffer::Size() || i >= Size()) return;
-		memcpy_s(Buffer::Data() + sizeof(T) * i, Buffer::Size() - sizeof(T) * i, Buffer::Data() + sizeof(T) * (i + 1), (nItems * sizeof(T)) - sizeof(T) * (i + 1));
+		RELIB_ASSERT(!memcpy_s(Buffer::Data() + sizeof(T) * i, Buffer::Size() - sizeof(T) * i, Buffer::Data() + sizeof(T) * (i + 1), (nItems * sizeof(T)) - sizeof(T) * (i + 1)));
 		nItems--;
 		ReLibMetrics.Memory.InUse -= sizeof(T);
 	}
