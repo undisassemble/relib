@@ -247,7 +247,7 @@ RELIB_EXPORT DWORD Asm::FindSectionIndex(_In_ DWORD dwRVA) {
 }
 
 RELIB_EXPORT DWORD Asm::FindIndex(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
-	if (dwSec > Sections.Size()) return _UI32_MAX;
+	if (dwSec >= Sections.Size()) return _UI32_MAX;
 	Vector<Line>* Lines = Sections[dwSec].Lines;
 	RELIB_ASSERT(Lines != NULL);
 
@@ -628,9 +628,9 @@ RELIB_EXPORT bool Asm::CheckRuntimeFunction(_In_ RUNTIME_FUNCTION* pFunc, _In_ b
 			return true;
 		}
 		Tables.Reserve(TableSize);
-		_ReLibData.LoggingCallback("Processing exception exception handler with %lu table(s) (at 0x%p)\n", Tables.Size(), NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData);
-		for (int i = 0; i < Tables.Size(); i++) {
-			Tables[i] = ReadRVA<C_SCOPE_TABLE>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD) * 2 + sizeof(C_SCOPE_TABLE) * i);
+		_ReLibData.LoggingCallback("Processing exception exception handler with %lu table(s) (at 0x%p)\n", TableSize, NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData);
+		for (int i = 0; i < TableSize; i++) {
+			Tables.Push(ReadRVA<C_SCOPE_TABLE>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD) * 2 + sizeof(C_SCOPE_TABLE) * i));
 		}
 
 		if (bFixAddr) {

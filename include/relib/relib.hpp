@@ -349,7 +349,8 @@ public:
 
 		// Size stuff
 		nItems += Items.Size();
-		Grow();
+		Reserve(Items.Size());
+		ReLibMetrics.Memory.InUse += Items.Size() * sizeof(T);
 
 		// Add to end
 		if (i == Size()) {
