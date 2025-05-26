@@ -34,11 +34,11 @@ option(ASMJIT_NO_FOREIGN "" TRUE)
 add_subdirectory("dependencies/asmjit")
 
 # relib
-file(GLOB SOURCES
+file(GLOB RELIB_SOURCES
 	"src/*.cpp"
 	"meta/relib.rc"
 )
-add_library(relib ${SOURCES})
+add_library(relib ${RELIB_SOURCES})
 target_include_directories(relib AFTER PUBLIC "include")
 target_link_libraries(relib Zydis asmjit)
 set_target_properties(relib PROPERTIES PREFIX "")
@@ -47,4 +47,11 @@ if (RELIB_SHARED)
 	target_compile_definitions(relib PUBLIC RELIB_SHARED)
 else()
 	set_target_properties(relib PROPERTIES SUFFIX ".lib")
+endif()
+
+# Strip debugging information
+if (DEFINED CMAKE_STRIP AND NOT RELIB_DEBUG AND RELIB_SHARED)
+	add_custom_command(TARGET Zydis POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:Zydis> "bin/${CMAKE_BUILD_TYPE}/Zydis.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:Zydis>)
+	add_custom_command(TARGET asmjit POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:asmjit> "bin/${CMAKE_BUILD_TYPE}/asmjit.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:asmjit>)
+	add_custom_command(TARGET relib POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:relib> "bin/${CMAKE_BUILD_TYPE}/relib.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:relib>)
 endif()

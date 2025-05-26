@@ -386,6 +386,9 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 		if (!dwRVA) {
 			_ReLibData.WarningCallback("Skipping NULL RVA\n");
 			continue;
+		} else if (dwRVA < Sections[0].OldRVA || dwRVA >= Sections[Sections.Size() - 1].OldRVA + Sections[Sections.Size() - 1].OldSize) {
+			_ReLibData.WarningCallback("Skipping invalid RVA (%08x)\n", dwRVA);
+			continue;
 		}
 		SectionIndex = FindSectionIndex(dwRVA);
 		if (SectionIndex > Sections.Size()) {
@@ -623,12 +626,12 @@ RELIB_EXPORT bool Asm::CheckRuntimeFunction(_In_ RUNTIME_FUNCTION* pFunc, _In_ b
 		Vector<C_SCOPE_TABLE> Tables;
 		DWORD TableSize = ReadRVA<DWORD>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD));
 		if (!TableSize) return true;
-		if (Tables.Size() > 10) {
-			_ReLibData.WarningCallback("Exception handler at 0x%p had more than 10 tables, skipping\n", NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData);
+		if (TableSize > 10) {
+			_ReLibData.WarningCallback("Exception handler at 0x%p had more than 10 tables, skipping (had %u)\n", NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData, TableSize);
 			return true;
 		}
 		Tables.Reserve(TableSize);
-		_ReLibData.LoggingCallback("Processing exception exception handler with %lu table(s) (at 0x%p)\n", TableSize, NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData);
+		_ReLibData.LoggingCallback("Processing exception handler with %u table(s) (at 0x%p)\n", TableSize, NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData);
 		for (int i = 0; i < TableSize; i++) {
 			Tables.Push(ReadRVA<C_SCOPE_TABLE>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD) * 2 + sizeof(C_SCOPE_TABLE) * i));
 		}
