@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief ReLib main include
  * @version 0.0.0
- * @date 2025-05-25
+ * @date 2025-05-27
  * @copyright MIT License
  */
 
@@ -27,8 +27,7 @@ typedef uint64_t QWORD;
 #define RELIB_EXPORT
 #endif
 
-// Its 1 in the morning, I've ha d to fully recompile the entirety of YAP 6 times to try and get cmake t ocut out the ufll path for this shit to work, so fuck you, you're not getting file information. line and debugger info shojdl e pleyny. im going to sleep. also fuck gcc fo including the ull path and not just the file name.
-#define __RELIB_ASSERT(expr, line) if (!(expr)) { _ReLibData.ErrorCallback("Assertion (" #expr ") failed at line " #line "\n"); DebugBreak(); exit(1); }
+#define __RELIB_ASSERT(expr, line) if (!(expr)) { _ReLibData.ErrorCallback("Assertion (" #expr ") failed at " __FILE_NAME__ ":" #line "\n"); DebugBreak(); exit(1); }
 #define _RELIB_ASSERT(expr, line) __RELIB_ASSERT(expr, line)
 
 /*!

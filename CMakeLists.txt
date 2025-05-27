@@ -12,7 +12,7 @@ option(RELIB_SHARED "Build shared libraries (.dll), off builds static libraries 
 option(RELIB_DEBUG "Debug build" ${RELIB_DEBUG_DEFAULT})
 set(BUILD_SHARED_LIBS ${RELIB_SHARED})
 message(STATUS "RELIB_SHARED = ${RELIB_SHARED}")
-message(STATUS "RELIB_DEBUG  = ${RELIB_DEBUG}")
+message(STATUS "RELIB_DEBUG = ${RELIB_DEBUG}")
 
 # Versioning stuff
 configure_file("meta/relib.rc.in" "meta/relib.rc")
