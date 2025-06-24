@@ -181,7 +181,7 @@ public:
 	 * 
 	 * @param [in] wIndex Index of section.
 	 * @param [in] Header Section header.
-	 * @param [in] Data Bytes of section data (optional).
+	 * @param [in] pData Bytes of section data (optional).
 	 */
 	RELIB_EXPORT void InsertSection(_In_ WORD wIndex, _In_ IMAGE_SECTION_HEADER Header, _In_opt_ Buffer* pData = NULL);
 

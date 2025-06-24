@@ -51,7 +51,7 @@ endif()
 
 # Strip debugging information
 if (DEFINED CMAKE_STRIP AND NOT RELIB_DEBUG AND RELIB_SHARED)
-	add_custom_command(TARGET Zydis POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:Zydis> "bin/${CMAKE_BUILD_TYPE}/Zydis.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:Zydis>)
-	add_custom_command(TARGET asmjit POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:asmjit> "bin/${CMAKE_BUILD_TYPE}/asmjit.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:asmjit>)
-	add_custom_command(TARGET relib POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:relib> "bin/${CMAKE_BUILD_TYPE}/relib.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:relib>)
+	#add_custom_command(TARGET Zydis POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:Zydis> "bin/${CMAKE_BUILD_TYPE}/Zydis.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:Zydis>)
+	#add_custom_command(TARGET asmjit POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:asmjit> "bin/${CMAKE_BUILD_TYPE}/asmjit.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:asmjit>)
+	#add_custom_command(TARGET relib POST_BUILD COMMAND objcopy --only-keep-debug $<TARGET_FILE:relib> "bin/${CMAKE_BUILD_TYPE}/relib.dbg" COMMAND ${CMAKE_STRIP} $<TARGET_FILE:relib>)
 endif()
