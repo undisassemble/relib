@@ -3,10 +3,10 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-05-25
+ * @date 2025-07-20
  * @copyright MIT License
  */
-
+=
 #define _RELIB_INTERNAL
 #include "relib/asm.hpp"
 #include "relib/asmtranslations.hpp"
@@ -103,6 +103,38 @@ RELIB_EXPORT bool IsInstructionCF(_In_ ZydisMnemonic mnemonic) {
 
 RELIB_EXPORT bool IsInstructionMemory(_In_ DecodedInstruction* pInstruction, _In_ DecodedOperand* pOperand) {
 	return IsInstructionCF(pInstruction->mnemonic) || pOperand->type == ZYDIS_OPERAND_TYPE_MEMORY;
+}
+
+RELIB_EXPORT void Line::ToString(_Out_ char* pOutStr, _In_ DWORD nOutStr, _In_ ZydisFormatter Formatter) const {
+	if (!pOutStr || !nOutStr) return;
+	ZeroMemory(pOutStr, nOutStr);
+	ZydisDecodedInstruction DecodedInst;
+	ZydisDecodedOperand DecodedOps[ZYDIS_MAX_OPERAND_COUNT_VISIBLE];
+	switch (Type) {
+	case LineType::Decoded:
+		DecodedInst = Decoded.Instruction;
+		for (int i = 0; i < Decoded.Instruction.operand_count_visible; i++) DecodedOps[i] = Decoded.Operands[i];
+		ZydisFormatterFormatInstruction(&Formatter, &DecodedInst, DecodedOps, DecodedInst.operand_count_visible, pOutStr, nOutStr, OldRVA, NULL);
+		break;
+	case LineType::Embed:
+		snprintf(pOutStr, nOutStr, "data (%lx)", Embed.Size);
+		break;
+	case LineType::JumpTable:
+		snprintf(pOutStr, nOutStr, "dd p_%08lx", (bRelative ? JumpTable.Base : 0) + JumpTable.Value);
+		break;
+	case LineType::Padding:
+		snprintf(pOutStr, nOutStr, "pad (%lx)", Padding.Size);
+		break;
+	case LineType::Pointer:
+		if (Pointer.IsAbs) {
+			snprintf(pOutStr, nOutStr, "dq p_%08llx", Pointer.Abs);
+		} else {
+			snprintf(pOutStr, nOutStr, "dd p_%08lx", Pointer.RVA);
+		}
+		break;
+	case LineType::RawInsert:
+		snprintf(pOutStr, nOutStr, "insert (%lx)", RawInsert.Size());
+	}
 }
 
 RELIB_EXPORT void DecodedInstruction::operator=(_In_ ZydisDecodedInstruction instruction) {

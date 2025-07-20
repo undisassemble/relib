@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-05-23
+ * @date 2025-07-20
  * @copyright MIT License
  * @bug Crashes due to `_pei386_runtime_relocator`.
  */
@@ -108,6 +108,16 @@ struct Line {
 		} Pointer;
 	};
 	Line() { RawInsert = Buffer(); }
+
+    /*!
+     * @brief Converts line to a human readable format.
+	 * @remark pOutStr must be large enough to contain the full string.
+     * 
+     * @param pOutStr Output destination.
+     * @param nOutStr Size of pOutStr.
+	 * @param Formatter Zydis formatter, only required if Line is of type Decoded.
+     */
+	RELIB_EXPORT void ToString(_Out_ char* pOutStr, _In_ DWORD nOutStr, _In_opt_ ZydisFormatter Formatter) const;
 };
 
 /*!
@@ -190,7 +200,8 @@ private:
 	 * 
 	 * @param [in] pLine Pointer to instruction
 	 * @param [in] pLabel Pointer to label, if used
-	 * @return RELIB_EXPORT 
+	 * @retval true Success.
+	 * @retval false Failure.
 	 */
 	RELIB_EXPORT bool FromDis(_In_ Line* pLine, _In_opt_ Label* pLabel);
 

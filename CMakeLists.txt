@@ -19,7 +19,7 @@ configure_file("meta/relib.rc.in" "meta/relib.rc")
 
 # Zydis
 option(ZYDIS_FEATURE_ENCODER "" OFF)
-option(ZYDIS_FEATURE_FORMATTER "" OFF)
+option(ZYDIS_FEATURE_FORMATTER "" ON)
 option(ZYDIS_BUILD_SHARED_LIB "" ${RELIB_SHARED})
 add_subdirectory("dependencies/zydis")
 
