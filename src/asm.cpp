@@ -405,11 +405,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 	TempLines.bExponentialGrowth = true;
 	DWORD SectionIndex;
 	size_t szBufferOffset = 0;
-#ifdef ENABLE_DUMPING
-	char FormattedBuf[128];
-	ZydisFormatter Formatter;
-	ZydisFormatterInit(&Formatter, ZYDIS_FORMATTER_STYLE_INTEL);
-#endif
+	bool bFailGracefully = false;
 
 	do {
 		// Setup
@@ -438,6 +434,10 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 				continue;
 			}
 			szBufferOffset = dwRVA - Header.VirtualAddress;
+			if (szBufferOffset >= RawBytes.Size()) {
+				_ReLibData.WarningCallback("Attempted to disassemble uninitialized memory\n");
+				continue;
+			}
 		}
 
 		// Locate current position in index
@@ -451,7 +451,8 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 		// Start disassembling
 		Line CraftedLine;
 		CraftedLine.Type = Decoded;
-		while (RawBytes.Size() && ZYAN_SUCCESS(ZydisDecoderDecodeFull(&Decoder, RawBytes.Data() + szBufferOffset, RawBytes.Size() - szBufferOffset, &Instruction, Operands))) {
+		ZyanStatus Status;
+		while (RawBytes.Size() && ZYAN_SUCCESS(Status = ZydisDecoderDecodeFull(&Decoder, RawBytes.Data() + szBufferOffset, RawBytes.Size() - szBufferOffset, &Instruction, Operands))) {
 			// Convert
 			CraftedLine.Decoded.Instruction = Instruction;
 			for (int i = 0; i < CraftedLine.Decoded.Instruction.operand_count; i++) {
@@ -479,7 +480,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 
 			TempLines.Push(CraftedLine);
 
-			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_RET) break;
+			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_RET || CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_INT3) break;
 
 			// Check if is jump table
 			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_LEA && CraftedLine.Decoded.Operands[1].mem.base == ZYDIS_REGISTER_RIP) {
@@ -622,13 +623,18 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 				break;
 			}
 		}
+		if (ZYAN_FAILED(Status)) {
+			_ReLibData.WarningCallback("Zydis failed to disassemble bytes at 0x%p with code %s\n", NTHeaders.OptionalHeader.ImageBase + dwRVA, ZydisErrorToString(Status));
+			bFailGracefully = true;
+		}
 
 		// Insert lines
+		if (!TempLines.Size()) _ReLibData.WarningCallback("Attempted to disassemble but got nothing\n");
 		Lines->Insert(i, TempLines);
 	} while (ToDisasm.Size());
 
 	ToDisasm.Release();
-	return true;
+	return !bFailGracefully;
 }
 
 RELIB_EXPORT bool Asm::CheckRuntimeFunction(_In_ RUNTIME_FUNCTION* pFunc, _In_ bool bFixAddr) {
@@ -850,28 +856,6 @@ RELIB_EXPORT bool Asm::Disassemble() {
 	}
 	_ReLibData.LoggingCallback("Disassembled Entry Point (0x%p)\n", NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.AddressOfEntryPoint);
 
-	// Error check
-	for (size_t i = 0; i < Sections.Size(); i++) {
-		if (Sections[i].OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
-			_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Sections[i].OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
-			return false;
-		}
-		Vector<Line>* Lines = Sections[i].Lines;
-		RELIB_ASSERT(Lines != NULL);
-		if (Lines) {
-			for (size_t j = 0; j < Lines->Size(); j++) {
-				if (Lines->At(j).OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
-					_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
-					return false;
-				}
-				if (j < Lines->Size() - 1 && Lines->At(j).OldRVA + GetLineSize(Lines->At(j)) > Lines->At(j + 1).OldRVA) {
-					_ReLibData.ErrorCallback("Validation failed, 0x%p + %u > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, GetLineSize(Lines->At(j)), NTHeaders.OptionalHeader.ImageBase + Lines->At(j + 1).OldRVA);
-					return false;
-				}
-			}
-		}
-	}
-
 	// Disassemble TLS callbacks
 	uint64_t* pCallbacks = GetTLSCallbacks();
 	if (pCallbacks) {
@@ -924,68 +908,102 @@ RELIB_EXPORT bool Asm::Disassemble() {
 		if (osize) _ReLibData.LoggingCallback("Disassembled %d switch cases\n", osize);
 	}
 
-	_ReLibData.LoggingCallback("Finished disassembly\n");
-
 	// Insert missing data + padding
 	Line line;
-	_ReLibData.LoggingCallback("Filling gaps\n");
+	Vector<Line>* Lines = NULL;
+	bool bExecutable;
+	_ReLibData.LoggingCallback("Finalizing\n");
 	for (int i = 0; i < Sections.Size(); i++) {
-		RELIB_ASSERT(Sections[i].Lines != NULL);
-		_ReLibData.LoggingCallback("Filling section %.8s (%llu lines)\n", SectionHeaders[i].Name, Sections[i].Lines->Size());
+		Lines = Sections[i].Lines;
+		RELIB_ASSERT(Lines != NULL);
+		bExecutable = SectionHeaders[i].Characteristics & IMAGE_SCN_MEM_EXECUTE && ~SectionHeaders[i].Characteristics & IMAGE_SCN_MEM_WRITE;
+		_ReLibData.LoggingCallback("Filling section %.8s (%llu lines)\n", SectionHeaders[i].Name, Lines->Size());
 
 		// Incase section holds no lines
-		if (!Sections[i].Lines->Size()) {	
-			line.Type = Embed;
-			line.OldRVA = Sections[i].OldRVA;
-			if (Sections[i].OldSize < SectionHeaders[i].SizeOfRawData) {
-				line.Embed.Size = Sections[i].OldSize;
-				Sections[i].Lines->Push(line);
+		if (!Lines->Size()) {
+			if (bExecutable) {
+				if (!DisasmRecursive(Sections[i].OldRVA))
+					return false;
+			} else {
+				line.Type = Embed;
+				line.OldRVA = Sections[i].OldRVA;
+				if (Sections[i].OldSize < SectionHeaders[i].SizeOfRawData) {
+					line.Embed.Size = Sections[i].OldSize;
+					Lines->Push(line);
+					continue;
+				}
+				line.Embed.Size = SectionHeaders[i].SizeOfRawData;
+				if (line.OldRVA && line.Embed.Size) Lines->Push(line);
+				line.Type = Padding;
+				line.OldRVA += line.Embed.Size;
+				line.Padding.Size = Sections[i].OldSize - (line.OldRVA - Sections[i].OldRVA);
+				if (line.OldRVA && line.Padding.Size) Lines->Push(line);
 				continue;
 			}
-			line.Embed.Size = SectionHeaders[i].SizeOfRawData;
-			if (line.OldRVA && line.Embed.Size) Sections[i].Lines->Push(line);
-			line.Type = Padding;
-			line.OldRVA += line.Embed.Size;
-			line.Padding.Size = Sections[i].OldSize - (line.OldRVA - Sections[i].OldRVA);
-			if (line.OldRVA && line.Padding.Size) Sections[i].Lines->Push(line);
-			continue;
 		}
 
 		// Insert prepended data
 		line.Type = Embed;
-		if (Sections[i].Lines->At(0).OldRVA > Sections[i].OldRVA) {
-			line.OldRVA = Sections[i].OldRVA;
-			line.Embed.Size = Sections[i].Lines->At(0).OldRVA - Sections[i].OldRVA;
-			Sections[i].Lines->Insert(0, line);
-		} else if (Sections[i].Lines->At(0).OldRVA < Sections[i].OldRVA) {
+		if (Lines->At(0).OldRVA > Sections[i].OldRVA) {
+			if (!bExecutable || !ReadRVA<WORD>(Sections[i].OldRVA) || !DisasmRecursive(Sections[i].OldRVA)) {
+				line.OldRVA = Sections[i].OldRVA;
+				line.Embed.Size = Lines->At(0).OldRVA - Sections[i].OldRVA;
+				Lines->Insert(0, line);
+			}
+		} else if (Lines->At(0).OldRVA < Sections[i].OldRVA) {
 			_ReLibData.WarningCallback("First line in section %d begins below the section (you should *hopefully* never see this)\n", i);
 		}
 
 		// Insert embedded data
-		for (int j = 0; j < Sections[i].Lines->Size() - 1; j++) {
-			line.OldRVA = Sections[i].Lines->At(j).OldRVA + GetLineSize(Sections[i].Lines->At(j));
-			if (line.OldRVA < Sections[i].Lines->At(j + 1).OldRVA) {
-				line.Embed.Size = Sections[i].Lines->At(j + 1).OldRVA - line.OldRVA;
-				Sections[i].Lines->Insert(j + 1, line);
-				j++;
+		for (int j = 0; j < Lines->Size() - 1; j++) {
+			line.OldRVA = Lines->At(j).OldRVA + GetLineSize(Lines->At(j));
+			if (line.OldRVA < Lines->At(j + 1).OldRVA) {
+				if (bExecutable && ReadRVA<WORD>(line.OldRVA) && DisasmRecursive(line.OldRVA)) {
+					j--;
+				} else {
+					line.Embed.Size = Lines->At(j + 1).OldRVA - line.OldRVA;
+					Lines->Insert(j + 1, line);
+					j++;
+				}
 			}
 		}
 
 		// Insert ending data
-		line.OldRVA = Sections[i].Lines->At(Sections[i].Lines->Size() - 1).OldRVA + GetLineSize(Sections[i].Lines->At(Sections[i].Lines->Size() - 1));
+		line.OldRVA = Lines->At(Lines->Size() - 1).OldRVA + GetLineSize(Lines->At(Lines->Size() - 1));
 		if (line.OldRVA - Sections[i].OldRVA < SectionHeaders[i].SizeOfRawData && line.OldRVA - Sections[i].OldRVA < Sections[i].OldSize) {
-			line.Embed.Size = ((Sections[i].OldSize < SectionHeaders[i].SizeOfRawData) ? Sections[i].OldSize : SectionHeaders[i].SizeOfRawData) - (line.OldRVA - Sections[i].OldRVA);
-			Sections[i].Lines->Push(line);
+			if (!bExecutable || !ReadRVA<WORD>(line.OldRVA) || !DisasmRecursive(line.OldRVA)) {
+				line.Embed.Size = ((Sections[i].OldSize < SectionHeaders[i].SizeOfRawData) ? Sections[i].OldSize : SectionHeaders[i].SizeOfRawData) - (line.OldRVA - Sections[i].OldRVA);
+				Lines->Push(line);
+			}
 		}
 
 		// Insert padding
 		line.Type = Padding;
-		line.OldRVA = Sections[i].Lines->At(Sections[i].Lines->Size() - 1).OldRVA + GetLineSize(Sections[i].Lines->At(Sections[i].Lines->Size() - 1));
+		line.OldRVA = Lines->At(Lines->Size() - 1).OldRVA + GetLineSize(Lines->At(Lines->Size() - 1));
 		line.Padding.Size = Sections[i].OldSize - (line.OldRVA - Sections[i].OldRVA);
-		if (line.OldRVA && line.Padding.Size) Sections[i].Lines->Push(line);
+		if (line.OldRVA && line.Padding.Size) Lines->Push(line);
 	}
-	_ReLibData.LoggingCallback("Filled gaps\n");
 	_ReLibData.LoggingCallback("Finished disassembly\n");
+
+	// Error check
+	for (size_t i = 0; i < Sections.Size(); i++) {
+		if (Sections[i].OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
+			_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Sections[i].OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
+			return false;
+		}
+		Vector<Line>* Lines = Sections[i].Lines;
+		RELIB_ASSERT(Lines != NULL);
+		for (size_t j = 0; j < Lines->Size(); j++) {
+			if (Lines->At(j).OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
+				_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
+				return false;
+			}
+			if (j < Lines->Size() - 1 && Lines->At(j).OldRVA + GetLineSize(Lines->At(j)) != Lines->At(j + 1).OldRVA) {
+				_ReLibData.ErrorCallback("Validation failed, 0x%p + %u != 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, GetLineSize(Lines->At(j)), NTHeaders.OptionalHeader.ImageBase + Lines->At(j + 1).OldRVA);
+				return false;
+			}
+		}
+	}
 	fProgress = 0.f;
 	return true;
 }
@@ -1189,12 +1207,8 @@ RELIB_EXPORT bool Asm::Assemble() {
 	// Link
 	fProgress = 0.f;
 	_ReLibData.LoggingCallback("Linking\n");
-	if (XREFs.Size() != XREFLabels.Size()) {
-		_ReLibData.ErrorCallback("This should never happen (XREFs.Size() != XREFLabels.Size())\n");
-		return false;
-	}
 	if (LinkLater.Size() != LinkLaterOffsets.Size()) {
-		_ReLibData.ErrorCallback("This should never happen part 2 (LinkLater.Size() != LinkLaterOffsets.Size())\n");
+		_ReLibData.ErrorCallback("This should never happen (LinkLater.Size() != LinkLaterOffsets.Size())\n");
 		return false;
 	}
 	for (int i = 0; i < LinkLater.Size(); i++) {
@@ -1217,15 +1231,20 @@ RELIB_EXPORT bool Asm::Assemble() {
 			return false;
 		}
 	}
+	LinkLater.Release();
+	LinkLaterOffsets.Release();
+	if (XREFs.Size() != XREFLabels.Size()) {
+		_ReLibData.ErrorCallback("This should never happen part 2 (XREFs.Size() != XREFLabels.Size())\n");
+		return false;
+	}
 	for (int i = 0; i < XREFs.Size(); i++) {
 		pAsm->code()->bindLabel(XREFLabels[i], pAsm->code()->textSection()->id(), TranslateOldAddress(XREFs[i]) - SectionHeaders[0].VirtualAddress);
 	}
-	LinkLater.Release();
-	LinkLaterOffsets.Release();
 	XREFs.Release();
 	XREFLabels.Release();
 
 	// Translate known addresses
+	_ReLibData.LoggingCallback("Translating addresses\n");
 	for (int i = 0; i < 16; i++) {
 		if (i == 5) continue;
 		NTHeaders.OptionalHeader.DataDirectory[i].VirtualAddress = TranslateOldAddress(NTHeaders.OptionalHeader.DataDirectory[i].VirtualAddress);
