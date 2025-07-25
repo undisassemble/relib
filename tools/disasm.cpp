@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Dumps disassembly of a file, for debugging.
  * @version 0.0.0
- * @date 2025-07-20
+ * @date 2025-07-25
  * @copyright MIT License
  */
 
@@ -23,11 +23,6 @@ int main(int argc, char** argv) {
         printf("Failed to open file \'%s\' (%d)\n", argv[1], pAsm->Status);
         return 1;
     }
-    HANDLE hFile = CreateFileA(argc > 2 ? argv[2] : (char*)"dump.txt", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (!hFile || hFile == INVALID_HANDLE_VALUE) {
-        printf("Failed to open output file (%d)\n", GetLastError());
-        return 1;
-    }
 
     // Disassemble
     if (!pAsm->Disassemble()) {
@@ -36,15 +31,20 @@ int main(int argc, char** argv) {
     }
     
     // Dump
+    HANDLE hFile = CreateFileA(argc > 2 ? argv[2] : (char*)"dump.txt", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (!hFile || hFile == INVALID_HANDLE_VALUE) {
+        printf("Failed to open output file (%d)\n", GetLastError());
+        return 1;
+    }
     ZydisFormatter fmt;
     ZydisFormatterInit(&fmt, ZYDIS_FORMATTER_STYLE_INTEL);
     char buf[MAX_PATH];
     for (DWORD dwSec = 0; dwSec < pAsm->GetSections().Size(); dwSec++) {
         AsmSection& sec = pAsm->GetSections().At(dwSec);
-        snprintf(buf, sizeof(buf), "Section \'%.8s\' %08llx -> %08llx\n", pAsm->SectionHeaders[dwSec].Name, sec.OldRVA, sec.OldRVA + sec.OldSize);
+        snprintf(buf, sizeof(buf), "Section \'%.8s\' %08lx -> %08lx\n", pAsm->SectionHeaders[dwSec].Name, sec.OldRVA, sec.OldRVA + sec.OldSize);
         WriteFile(hFile, buf, lstrlenA(buf), NULL, NULL);
         if (!sec.Lines) {
-            WriteFile(hFile, "NO LINES!\n\n", 10, NULL, NULL);
+            WriteFile(hFile, "NO LINES!\n", 10, NULL, NULL);
             continue;
         }
         for (DWORD i = 0; i < sec.Lines->Size(); i++) {
