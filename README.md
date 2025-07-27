@@ -3,7 +3,7 @@
 > [!WARNING]
 > ReLib is currently unstable and being tested, don't try to use this on any malicious files.
 
-Reverse engineering library for AMD64 Windows PEs.
+Library for analyzing x86_64 PEs.
 
 
 ## Usage
