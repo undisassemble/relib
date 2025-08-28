@@ -14,9 +14,8 @@ CMake options:
 - `RELIB_SHARED`: `ON` builds shared (.dll) libraries, `OFF` builds static (.lib) libraries.
 - `RELIB_DEBUG`: Whether the debug version should be built, automatically enabled if `CMAKE_BUILD_TYPE` is `Debug`.
 
-Documentation is available [here](https://undisassemble.dev/relib)
-
 
 ## License
 
 ReLib is licensed under the MIT License.
+
