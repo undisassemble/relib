@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Dumps disassembly of a file, for debugging.
  * @version 0.0.0
- * @date 2025-07-25
+ * @date 2025-08-30
  * @copyright MIT License
  */
 
@@ -30,15 +30,28 @@ int main(int argc, char** argv) {
         return 1;
     }
     
-    // Dump
     HANDLE hFile = CreateFileA(argc > 2 ? argv[2] : (char*)"dump.txt", GENERIC_WRITE, FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    char buf[MAX_PATH];
     if (!hFile || hFile == INVALID_HANDLE_VALUE) {
         printf("Failed to open output file (%d)\n", GetLastError());
         return 1;
     }
+
+    // Dump function ranges
+    for (int i = 0; i < pAsm->GetFunctionRanges().Size(); i++) {
+        snprintf(buf, sizeof(buf), "%p -> %p", pAsm->NTHeaders.OptionalHeader.ImageBase + pAsm->GetFunctionRanges()[i].dwStart, pAsm->NTHeaders.OptionalHeader.ImageBase + pAsm->GetFunctionRanges()[i].dwStart + pAsm->GetFunctionRanges()[i].dwSize);
+        WriteFile(hFile, buf, lstrlenA(buf), NULL, NULL);
+        for (int j = 0; j < pAsm->GetFunctionRanges()[i].Entries.Size(); i++) {
+            snprintf(buf, sizeof(buf), ", %p", pAsm->NTHeaders.OptionalHeader.ImageBase + pAsm->GetFunctionRanges()[i].Entries[j]);
+            WriteFile(hFile, buf, lstrlenA(buf), NULL, NULL);
+        }
+        WriteFile(hFile, "\n", 1, NULL, NULL);
+    }
+    WriteFile(hFile, "\n", 1, NULL, NULL);
+    
+    // Dump disassembly
     ZydisFormatter fmt;
     ZydisFormatterInit(&fmt, ZYDIS_FORMATTER_STYLE_INTEL);
-    char buf[MAX_PATH];
     for (DWORD dwSec = 0; dwSec < pAsm->GetSections().Size(); dwSec++) {
         AsmSection& sec = pAsm->GetSections().At(dwSec);
         snprintf(buf, sizeof(buf), "Section \'%.8s\' %08lx -> %08lx\n", pAsm->SectionHeaders[dwSec].Name, sec.OldRVA, sec.OldRVA + sec.OldSize);

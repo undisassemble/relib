@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-07-25
+ * @date 2025-08-30
  * @copyright MIT License
  */
 
@@ -196,6 +196,7 @@ RELIB_EXPORT DecodedOperand::operator ZydisDecodedOperand() const {
 		break;
 	case ZYDIS_OPERAND_TYPE_IMMEDIATE:
 		ret.imm.is_signed = imm.is_signed;
+		ret.imm.is_relative = true;
 		ret.imm.value.u = imm.value.u;
 		break;
 	case ZYDIS_OPERAND_TYPE_POINTER:
@@ -307,7 +308,7 @@ RELIB_EXPORT DWORD Asm::FindIndex(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
 		}
 		i = GetNextOriginal(dwSec, i);
 		if (i >= szMax || i == PrevI) i = GetNextOriginal(dwSec, szMin + 1);
-		if (i == PrevI) break;
+		if (i == PrevI || i == _UI32_MAX) break;
 
 		// Check index
 		if (dwRVA >= Lines->At(i).OldRVA && dwRVA < Lines->At(i).OldRVA + GetLineSize(Lines->At(i))) {
@@ -393,6 +394,113 @@ RELIB_EXPORT DWORD Asm::FindPosition(_In_ DWORD dwSec, _In_ DWORD dwRVA) {
 	}
 
 	return _UI32_MAX;
+}
+
+RELIB_EXPORT void Asm::FindFunctions() {
+	for (long long FunctionIndex = 0; FunctionIndex < Functions.Size(); FunctionIndex++) {
+		// Setup
+		if (!Functions[FunctionIndex]) continue;
+		FunctionRange CurrentFunction;
+
+		// Get entry
+		DWORD SecIndex = FindSectionIndex(Functions[FunctionIndex]);
+		if (SecIndex == _UI32_MAX) {
+			_ReLibData.WarningCallback("Failed to find function entry %08x\n", Functions[FunctionIndex]);
+			continue;
+		}
+		Vector<Line>* pLines = Sections[SecIndex].Lines;
+		DWORD LineIndex = FindIndex(SecIndex, Functions[FunctionIndex]);
+		if (LineIndex == _UI32_MAX || !pLines) {
+			_ReLibData.WarningCallback("Failed to find function entry %08x\n", Functions[FunctionIndex]);
+			continue;
+		}
+		if (pLines->At(LineIndex).Type != Decoded) {
+			_ReLibData.WarningCallback("Skipping function at %08x\n", Functions[FunctionIndex]);
+			continue;
+		}
+
+		// If the function just jmps, add it as a possibility and skip it
+		if (pLines->At(LineIndex).Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_JMP) {
+			ZydisDecodedInstruction zdi = pLines->At(LineIndex).Decoded.Instruction;
+			ZydisDecodedOperand op = pLines->At(LineIndex).Decoded.Operands[0];
+			uint64_t out = 0;
+			if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&zdi, &op, pLines->At(LineIndex).OldRVA, &out)) && !Functions.Includes(out)) Functions.Push(out);
+			continue;
+		}
+
+		CurrentFunction.dwEntry = Functions[FunctionIndex];
+		CurrentFunction.dwStart = Functions[FunctionIndex];
+		Vector<DWORD> ToDo;
+		Vector<DWORD> Done;
+		DWORD current;
+		ToDo.Push(Functions[FunctionIndex]);
+
+		while (ToDo.Size()) {
+			if (!LineIndex) {
+				current = ToDo.Pop();
+				Done.Push(current);
+				LineIndex = FindIndex(SecIndex, current);
+				if (LineIndex == _UI32_MAX) {
+					_ReLibData.WarningCallback("Couldn't follow function segment at %08x\n", current);
+					LineIndex = 0;
+					continue;
+				}
+			}
+
+			if (pLines->At(LineIndex).Type != Decoded) {
+				_ReLibData.WarningCallback("Control flow of function %08x reached non-code segment, trashing\n", pLines->At(LineIndex).OldRVA);
+				CurrentFunction.dwEntry = 0;
+				ToDo.Release();
+				break;
+			}
+
+			// Check if current instruction enters other function (for noreturn)
+			if (Functions[FunctionIndex] != pLines->At(LineIndex).OldRVA && Functions.Includes(pLines->At(LineIndex).OldRVA)) {
+				LineIndex = 0;
+				continue;
+			}
+			
+			// Add current instruction
+			if (pLines->At(LineIndex).OldRVA < CurrentFunction.dwStart) {
+				CurrentFunction.dwStart = pLines->At(LineIndex).OldRVA;
+			}
+			if (pLines->At(LineIndex).OldRVA + GetLineSize(pLines->At(LineIndex)) > CurrentFunction.dwStart + CurrentFunction.dwSize) {
+				CurrentFunction.dwSize = pLines->At(LineIndex).OldRVA + GetLineSize(pLines->At(LineIndex)) - CurrentFunction.dwStart;
+			}
+
+			// CF
+			if (IsInstructionCF(pLines->At(LineIndex).Decoded.Instruction.mnemonic) && pLines->At(LineIndex).Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE && pLines->At(LineIndex).Decoded.Instruction.mnemonic != ZYDIS_MNEMONIC_CALL) {
+				ZydisDecodedInstruction zdi = pLines->At(LineIndex).Decoded.Instruction;
+				ZydisDecodedOperand op = pLines->At(LineIndex).Decoded.Operands[0];
+				uint64_t out = 0;
+				ZyanStatus stat;
+				if (ZYAN_SUCCESS(stat = ZydisCalcAbsoluteAddress(&zdi, &op, pLines->At(LineIndex).OldRVA, &out))) {
+					if (!Done.Includes(out) && !Functions.Includes(out)) ToDo.Push(out);
+				} else {
+					_ReLibData.WarningCallback("Couldn't follow function segment at %08x (%s)\n", pLines->At(LineIndex).OldRVA, ZydisErrorToString(stat));
+					LineIndex = 0;
+					continue;
+				}
+				if (pLines->At(LineIndex).Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_JMP) {
+					LineIndex = 0;
+					continue;
+				}
+			}
+
+			// Check for return
+			if (pLines->At(LineIndex).Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_RET) {
+				LineIndex = 0;
+				continue;
+			}
+
+			if (LineIndex) LineIndex++;
+ 		}
+		ToDo.Release();
+		Done.Release();
+
+		if (CurrentFunction.dwEntry) FunctionRanges.Push(CurrentFunction);
+	}
+	Functions.Release();
 }
 
 RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
@@ -1326,7 +1434,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 	// Fix function ranges
 	for (int i = 0; i < FunctionRanges.Size(); i++) {
 		FunctionRange range = FunctionRanges[i];
-		for (int j = 0; j < range.Entries.Size(); j++) range.Entries[j] = TranslateOldAddress(range.Entries[j]);
+		range.dwEntry = TranslateOldAddress(range.dwEntry);
 		
 		// Bandaid fix
 		DWORD offset = 0;
@@ -1576,9 +1684,8 @@ RELIB_EXPORT void Asm::RemoveData(_In_ DWORD dwRVA, _In_ DWORD dwSize) {
 	DeleteLine(sec, i);
 }
 
-RELIB_EXPORT Vector<FunctionRange> Asm::GetDisassembledFunctionRanges() {
-	Vector<FunctionRange> clone = FunctionRanges;
-	return clone;
+RELIB_EXPORT Vector<FunctionRange> Asm::GetFunctionRanges() {
+	return FunctionRanges;
 }
 
 RELIB_EXPORT DWORD GetLineSize(_In_ const Line& line) {

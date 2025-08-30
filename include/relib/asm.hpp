@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-07-20
+ * @date 2025-08-30
  * @copyright MIT License
  * @bug Crashes due to `_pei386_runtime_relocator`.
  */
@@ -136,7 +136,7 @@ struct AsmSection {
  * @brief Function information for partial loading.
  */
 struct FunctionRange {
-	Vector<DWORD> Entries; //!< Entry points of function.
+	DWORD dwEntry;         //!< Function entry
 	DWORD dwStart = 0;     //!< Beginning RVA of the function.
 	DWORD dwSize = 0;      //!< Size of the function.
 };
@@ -210,7 +210,7 @@ protected:
 	Vector<DWORD> JumpTables;             //!< Jump table RVAs that have not yet been disassembled.
 	ZydisDecoder Decoder;                 //!< Decoder instance.
 	Vector<DWORD> Functions;              //!< Known function entries referenced in code.
-	Vector<FunctionRange> FunctionRanges; //!< Functions found by `Analyze()`.
+	Vector<FunctionRange> FunctionRanges; //!< Functions found via FindFunctions.
 	uint64_t Progress = 0;                //!< Total number of disassembled bytes.
 	uint64_t ToDo = 0;                    //!< Estimated number of bytes to disassemble.
 	asmjit::x86::Assembler* pAsm = NULL;  //!< Which assembler to use when assembling.
@@ -242,14 +242,22 @@ public:
 	RELIB_EXPORT void SetAssembler(_In_ asmjit::x86::Assembler* pAssembler);
 
 	/*!
-	 * @brief Retrieves the function ranges found by `Analyze()`.
+	 * @brief Searches disassembly for functions.
+	 * @todo Check if this works with noreturn functions
+	 * 
+	 * @see GetFunctionRanges
+	 */
+	RELIB_EXPORT void FindFunctions();
+
+	/*!
+	 * @brief Retrieves functions found via FindFunctions.
 	 * 
 	 * @return Discovered functions.
 	 * 
-	 * @see Analyze
+	 * @see FindFunctions
 	 * @see FunctionRange
 	 */
-	RELIB_EXPORT Vector<FunctionRange> GetDisassembledFunctionRanges();
+	RELIB_EXPORT Vector<FunctionRange> GetFunctionRanges();
 
 	/*!
 	 * @brief Strips debug info & symbols.
