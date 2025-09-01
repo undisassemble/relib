@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-08-30
+ * @date 2025-08-31
  * @copyright MIT License
  */
 
@@ -514,6 +514,14 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 	DWORD SectionIndex;
 	size_t szBufferOffset = 0;
 	bool bFailGracefully = false;
+	struct {
+		ZydisDecodedInstruction first;
+		ZydisDecodedOperand ptr;
+		ZydisRegister array_reg;
+		ZydisRegister dest_reg;
+		DWORD dwRVA = 0;
+		int instCount = 0;
+	} JumpTableChance;
 
 	do {
 		// Setup
@@ -588,39 +596,76 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 
 			TempLines.Push(CraftedLine);
 
+			// Jump table chance modification
+			switch (JumpTableChance.instCount) {
+			case 1:
+				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOVZX && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER) {
+					JumpTableChance.instCount = 2;
+					break;
+				}
+				JumpTableChance.instCount = 0;
+				break;
+			case 2:
+				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOVSXD && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && CraftedLine.Decoded.Operands[1].mem.base == JumpTableChance.array_reg && CraftedLine.Decoded.Operands[1].mem.scale == 2) {
+					JumpTableChance.instCount = 3;
+					JumpTableChance.dest_reg = CraftedLine.Decoded.Operands[0].reg.value;
+					break;
+				}
+				JumpTableChance.instCount = 0;
+				break;
+			case 3:
+				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_ADD && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[0].reg.value == JumpTableChance.dest_reg && CraftedLine.Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[1].reg.value == JumpTableChance.array_reg) {
+					JumpTableChance.instCount = 4;
+					break;
+				}
+				JumpTableChance.instCount = 0;
+				break;
+			case 4:
+				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_JMP && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[0].reg.value == JumpTableChance.dest_reg) {
+					DWORD trva = 0, rva = 0, disp = 0, odisp = 0;
+					{
+						uint64_t r;
+						ZydisCalcAbsoluteAddress(&JumpTableChance.first, &JumpTableChance.ptr, JumpTableChance.dwRVA, &r);
+						disp = odisp = r;
+					}
+
+					do {
+						rva = ReadRVA<DWORD>(disp);
+						if (!rva) break;
+						trva = odisp + rva;
+						if (!(trva != 0xCCCCCCCC && trva >= Sections[SectionIndex].OldRVA && trva < Sections[SectionIndex].OldRVA + Sections[SectionIndex].OldSize)) break;
+						if (!JumpTables.Includes(trva)) JumpTables.Push(trva);
+						Line TempJumpTable;
+						TempJumpTable.OldRVA = disp;
+						TempJumpTable.Type = JumpTable;
+						TempJumpTable.bRelative = true;
+						TempJumpTable.JumpTable.Value = rva;
+						TempJumpTable.JumpTable.Base = odisp;
+						WORD SecIndex = FindSectionIndex(disp);
+						DWORD i = FindPosition(SecIndex, disp);
+						if (i == _UI32_MAX) {
+							_ReLibData.ErrorCallback("Failed to find position for 0x%p\n", NTHeaders.OptionalHeader.ImageBase + disp);
+							return false;
+						}
+						if (i != _UI32_MAX - 1) Sections[SecIndex].Lines->Insert(i, TempJumpTable);
+						disp += sizeof(DWORD);
+					} while (1);
+				}
+				__fallthrough;
+			default:
+				JumpTableChance.instCount = 0;
+				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_LEA && CraftedLine.Decoded.Operands[1].mem.base == ZYDIS_REGISTER_RIP) {
+					JumpTableChance.instCount = 1;
+					JumpTableChance.array_reg = CraftedLine.Decoded.Operands[0].reg.value;
+					JumpTableChance.ptr = CraftedLine.Decoded.Operands[1];
+					JumpTableChance.first = CraftedLine.Decoded.Instruction;
+					JumpTableChance.dwRVA = CraftedLine.OldRVA;
+				}
+			}
+			
 			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_RET || CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_INT3) break;
 
 			// Check if is jump table
-			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_LEA && CraftedLine.Decoded.Operands[1].mem.base == ZYDIS_REGISTER_RIP) {
-				DWORD trva = 0, rva = 0, disp = 0, odisp = 0;
-				{
-					uint64_t r;
-					ZydisCalcAbsoluteAddress(&Instruction, &Operands[1], CraftedLine.OldRVA, &r);
-					disp = odisp = r;
-				}
-
-				do {
-					rva = ReadRVA<DWORD>(disp);
-					if (!rva) break;
-					trva = odisp + rva;
-					if (!(trva != 0xCCCCCCCC && trva >= Sections[SectionIndex].OldRVA && trva < Sections[SectionIndex].OldRVA + Sections[SectionIndex].OldSize)) break;
-					if (!JumpTables.Includes(trva)) JumpTables.Push(trva);
-					Line TempJumpTable;
-					TempJumpTable.OldRVA = disp;
-					TempJumpTable.Type = JumpTable;
-					TempJumpTable.bRelative = true;
-					TempJumpTable.JumpTable.Value = rva;
-					TempJumpTable.JumpTable.Base = odisp;
-					WORD SecIndex = FindSectionIndex(disp);
-					DWORD i = FindPosition(SecIndex, disp);
-					if (i == _UI32_MAX) {
-						_ReLibData.ErrorCallback("Failed to find position for 0x%p\n", NTHeaders.OptionalHeader.ImageBase + disp);
-						return false;
-					}
-					if (i != _UI32_MAX - 1) Sections[SecIndex].Lines->Insert(i, TempJumpTable);
-					disp += sizeof(DWORD);
-				} while (1);
-			}
 			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOV && CraftedLine.Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && CraftedLine.Decoded.Operands[1].mem.scale == 4 && CraftedLine.Decoded.Operands[1].mem.base != ZYDIS_REGISTER_RIP) {
 				DWORD rva = 0;
 				DWORD disp = CraftedLine.Decoded.Operands[1].mem.disp.value;
@@ -810,7 +855,7 @@ RELIB_EXPORT bool Asm::CheckRuntimeFunction(_In_ RUNTIME_FUNCTION* pFunc, _In_ b
 	return true;
 }
 
-RELIB_EXPORT bool Asm::Disassemble() {
+RELIB_EXPORT bool Asm::Disassemble(_In_ bool bReturnIfFailed) {
 	if (Status) {
 		_ReLibData.ErrorCallback("Could not begin disassembly, as no binary is loaded (%hhd)\n", Status);
 		return false;
@@ -959,38 +1004,48 @@ RELIB_EXPORT bool Asm::Disassemble() {
 	ZydisDecoderInit(&Decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
 
 	// Disassemble entry point
+	_ReLibData.LoggingCallback("Disassembling entry point\n");
 	if (!DisasmRecursive(NTHeaders.OptionalHeader.AddressOfEntryPoint)) {
-		return false;
+		_ReLibData.ErrorCallback("Failed to disassemble entry point (0x%p)\n", NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.AddressOfEntryPoint);
+		if (bReturnIfFailed) return false;
+	} else {
+		_ReLibData.LoggingCallback("Disassembled entry point (0x%p)\n", NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.AddressOfEntryPoint);
 	}
-	_ReLibData.LoggingCallback("Disassembled Entry Point (0x%p)\n", NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.AddressOfEntryPoint);
 
 	// Disassemble TLS callbacks
+	_ReLibData.LoggingCallback("Disassembling TLS callbacks\n");
 	uint64_t* pCallbacks = GetTLSCallbacks();
 	if (pCallbacks) {
 		for (WORD i = 0; pCallbacks[i]; i++) {
 			if (!DisasmRecursive(pCallbacks[i] - NTHeaders.OptionalHeader.ImageBase)) {
-				return false;
+				_ReLibData.ErrorCallback("Failed to disassemble TLS callback at 0x%p\n", pCallbacks[i]);
+				if (bReturnIfFailed) return false;
+			} else {
+				_ReLibData.LoggingCallback("Disassembled TLS callback (0x%p)\n", pCallbacks[i]);
 			}
-			_ReLibData.LoggingCallback("Disassembled TLS Callback (0x%p)\n", pCallbacks[i]);
 		}
 	}
 
 	// Disassemble exports
+	_ReLibData.LoggingCallback("Disassembling exports\n");
 	{
 		Vector<DWORD> Exports = GetExportedSymbolRVAs();
 		Vector<char*> ExportNames = GetExportedSymbolNames();
 		for (int i = 0; i < Exports.Size(); i++) {
 			if (!DisasmRecursive(Exports[i])) {
-				return false;
+				_ReLibData.ErrorCallback("Failed to disassemble function at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Exports[i]);
+				if (bReturnIfFailed) return false;
+			} else {
+				_ReLibData.LoggingCallback("Disassembled exported function \'%s\'\n", ExportNames[i]);
 			}
-			_ReLibData.LoggingCallback("Disassembled exported function \'%s\'\n", ExportNames[i]);
 		}
 		Exports.Release();
 		ExportNames.Release();
 	}
-	_ReLibData.LoggingCallback("Disassembled Exports\n");
+	_ReLibData.LoggingCallback("Disassembled exports\n");
 
 	// Disassemble exception dir
+	_ReLibData.LoggingCallback("Disassembling exception directory\n");
 	IMAGE_DATA_DIRECTORY ExcDataDir = NTHeaders.OptionalHeader.DataDirectory[3];
 	if (ExcDataDir.VirtualAddress) {
 		Buffer ExcData = SectionData[FindSectionByRVA(ExcDataDir.VirtualAddress)];
@@ -999,19 +1054,26 @@ RELIB_EXPORT bool Asm::Disassemble() {
 			RUNTIME_FUNCTION* pArray = reinterpret_cast<RUNTIME_FUNCTION*>(ExcData.Data() + ExcDataDir.VirtualAddress - ExcSecHeader.VirtualAddress);
 			for (uint32_t i = 0, n = ExcDataDir.Size / sizeof(RUNTIME_FUNCTION); i < n; i++) {
 				if (!CheckRuntimeFunction(&pArray[i])) {
-					return false;
+					_ReLibData.ErrorCallback("Failed to check RUNTIME_FUNCTION at 0x%p\n", &pArray[i]);
+					if (bReturnIfFailed) return false;
 				}
 			}
 		}
 	}
-	_ReLibData.LoggingCallback("Disassembled Exception Directory\n");
+	_ReLibData.LoggingCallback("Disassembled exception directory\n");
 
 	// Disassemble jump tables
+	_ReLibData.LoggingCallback("Disassembling jump tables\n");
 	{
 		DWORD osize = JumpTables.Size();
 		while (JumpTables.Size()) {
-			if (!DisasmRecursive(JumpTables.Pop()))
-				return false;
+			DWORD dwJumpTable = JumpTables.Pop();
+			if (!DisasmRecursive(dwJumpTable)) {
+				_ReLibData.ErrorCallback("Failed to disassemble jump table at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + dwJumpTable);
+				if (bReturnIfFailed) return false;
+			} else {
+				_ReLibData.LoggingCallback("Disassembled jump table at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + dwJumpTable);
+			}
 		}
 		if (osize) _ReLibData.LoggingCallback("Disassembled %d switch cases\n", osize);
 	}
@@ -1030,8 +1092,10 @@ RELIB_EXPORT bool Asm::Disassemble() {
 		// Incase section holds no lines
 		if (!Lines->Size()) {
 			if (bExecutable) {
-				if (!DisasmRecursive(Sections[i].OldRVA))
-					return false;
+				if (!DisasmRecursive(Sections[i].OldRVA)) {
+					_ReLibData.ErrorCallback("Failed to disassemble section at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Sections[i].OldRVA);
+					if (bReturnIfFailed) return false;
+				}
 			} else {
 				line.Type = Embed;
 				line.OldRVA = Sections[i].OldRVA;

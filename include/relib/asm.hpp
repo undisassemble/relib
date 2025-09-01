@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-08-30
+ * @date 2025-08-31
  * @copyright MIT License
  * @bug Crashes due to `_pei386_runtime_relocator`.
  */
@@ -315,10 +315,12 @@ public:
 	/*!
 	 * @brief Disassembles application.
 	 * 
+	 * @param [in] bReturnIfFailed If true, Disassemble returns immediately if something fails to disassemble, otherwise it will continue to disassemble other portions of code.
+	 * 
 	 * @retval true Success.
 	 * @retval false Failure.
 	 */
-	RELIB_EXPORT bool Disassemble();
+	RELIB_EXPORT bool Disassemble(_In_ bool bReturnIfFailed = false);
 
 	/*!
 	 * @brief Assembles application.
