@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-08-31
+ * @date 2025-11-06
  * @copyright MIT License
  */
 
@@ -133,7 +133,7 @@ RELIB_EXPORT void Line::ToString(_Out_ char* pOutStr, _In_ DWORD nOutStr, _In_ Z
 		}
 		break;
 	case LineType::RawInsert:
-		snprintf(pOutStr, nOutStr, "insert (%lx)", RawInsert.Size());
+		snprintf(pOutStr, nOutStr, "insert (%llx)", RawInsert.Size());
 	}
 }
 
@@ -576,14 +576,12 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 			}
 			CraftedLine.OldRVA = dwRVA;
 			if (IsInstructionCF(Instruction.mnemonic)) {
-				if (Operands[0].type != ZYDIS_OPERAND_TYPE_REGISTER && ZYAN_FAILED(ZydisCalcAbsoluteAddress(&Instruction, Operands, CraftedLine.OldRVA, &CraftedLine.Decoded.refs))) {
-					_ReLibData.WarningCallback("Could not calculate referenced address (0x%p) (type 1)\n", NTHeaders.OptionalHeader.ImageBase + dwRVA);
-				}
+				ZydisCalcAbsoluteAddress(&Instruction, Operands, CraftedLine.OldRVA, &CraftedLine.Decoded.refs);
 			} else {
 				for (int i = 0; i < Instruction.operand_count_visible; i++) {
 					if (Operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY && Operands[i].mem.base == ZYDIS_REGISTER_RIP) {
 						if (ZYAN_FAILED(ZydisCalcAbsoluteAddress(&Instruction, &Operands[i], CraftedLine.OldRVA, &CraftedLine.Decoded.refs))) {
-							_ReLibData.WarningCallback("Could not calculate referenced address (0x%p) (type 2)\n", NTHeaders.OptionalHeader.ImageBase + dwRVA);
+							_ReLibData.WarningCallback("Could not calculate referenced address (0x%p)\n", NTHeaders.OptionalHeader.ImageBase + dwRVA);
 						}
 						break;
 					}
@@ -790,72 +788,118 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 	return !bFailGracefully;
 }
 
-RELIB_EXPORT bool Asm::CheckRuntimeFunction(_In_ RUNTIME_FUNCTION* pFunc, _In_ bool bFixAddr) {
-	// Fix addresses mode
-	if (bFixAddr) {
-		pFunc->BeginAddress = TranslateOldAddress(pFunc->BeginAddress);
-		pFunc->EndAddress = TranslateOldAddress(pFunc->EndAddress);
-		pFunc->UnwindData = TranslateOldAddress(pFunc->UnwindData);
-	} else {
-		if (!Functions.Includes(pFunc->BeginAddress)) Functions.Push(pFunc->BeginAddress);
-		// Disassemble
-		if (pFunc->BeginAddress && !DisasmRecursive(pFunc->BeginAddress))
-			return false;
+RELIB_EXPORT bool Asm::CheckRuntimeFunction(_In_ DWORD FuncRVA) {
+	// Add entry to function list
+	RUNTIME_FUNCTION Func = ReadRVA<RUNTIME_FUNCTION>(FuncRVA);
+	if (!Functions.Includes(Func.BeginAddress)) Functions.Push(Func.BeginAddress);
+	
+	// Insert pointers
+	WORD iSection = FindSectionByRVA(FuncRVA);
+	DWORD iInsert = FindPosition(iSection, FuncRVA);
+	if (iSection != _UI16_MAX && iInsert != _UI32_MAX && iInsert != _UI32_MAX - 1) {
+		Vector<Line> FuncPtrs;
+		Line ptr;
+		ptr.Type = Pointer;
+		ptr.OldRVA = FuncRVA;
+		ptr.Pointer.IsAbs = false;
+		ptr.Pointer.RVA = Func.BeginAddress;
+		FuncPtrs.Push(ptr);
+		ptr.OldRVA += sizeof(DWORD);
+		ptr.Pointer.RVA = Func.EndAddress;
+		FuncPtrs.Push(ptr);
+		ptr.OldRVA += sizeof(DWORD);
+		ptr.Pointer.RVA = Func.UnwindData;
+		FuncPtrs.Push(ptr);
+		Sections[iSection].Lines->Insert(iInsert, FuncPtrs);
+		FuncPtrs.Release();
 	}
 
+	// Disassemble
+	if (Func.BeginAddress && !DisasmRecursive(Func.BeginAddress))
+		return false;
+
 	// Check unwind info for function
-	UNWIND_INFO UnwindInfo = ReadRVA<UNWIND_INFO>(pFunc->UnwindData);
-	if (UnwindInfo.NumUnwindCodes & 1) UnwindInfo.NumUnwindCodes++;
+	UNWIND_INFO UnwindInfo = ReadRVA<UNWIND_INFO>(Func.UnwindData);
+	if (UnwindInfo.NumUnwindCodes & 1) UnwindInfo.NumUnwindCodes++; // Alignment
+
+	// Get address of next handler
+	DWORD CurrentRVA = Func.UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE);
+	// DWORD EndingRVA = 0;
+	// if (NextRVA) {
+	// 	EndingRVA = ReadRVA<RUNTIME_FUNCTION>(NextRVA).UnwindData;
+	// } else {
+	// 	iSection = FindSectionByRVA(Func.UnwindData);
+	// 	if (iSection == _UI16_MAX) {
+	// 		_ReLibData.WarningCallback("Failed to get section with unwind at 0x%08lx\n", Func.UnwindData);
+	// 	} else {
+	// 		EndingRVA = GetSections()[iSection].OldRVA + GetSections()[iSection].OldSize;
+	// 	}
+	// }
 
 	// Check for handler
-	if (UnwindInfo.Flags & UNW_FLAG_EHANDLER || UnwindInfo.Flags & UNW_FLAG_UHANDLER) {
-		
-		// Handler RVA
-		DWORD RVA = ReadRVA<DWORD>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE));
-		
-		// Scope table
-		Vector<C_SCOPE_TABLE> Tables;
-		DWORD TableSize = ReadRVA<DWORD>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD));
-		if (!TableSize) return true;
-		if (TableSize > 10) {
-			_ReLibData.WarningCallback("Exception handler at 0x%p had more than 10 tables, skipping (had %u)\n", NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData, TableSize);
+	if (/* (!EndingRVA || CurrentRVA + sizeof(DWORD) <= EndingRVA) && */ (UnwindInfo.Flags & UNW_FLAG_EHANDLER || UnwindInfo.Flags & UNW_FLAG_UHANDLER)) {
+		// Get handler RVA
+		DWORD HandlerRVA = ReadRVA<DWORD>(CurrentRVA);
+		iSection = FindSectionByRVA(HandlerRVA);
+		if (iSection == _UI16_MAX || !HandlerRVA || !(SectionHeaders[iSection].Characteristics & IMAGE_SCN_MEM_EXECUTE)) {
+			_ReLibData.WarningCallback("Invalid handler RVA at 0x%08llx\n", NTHeaders.OptionalHeader.ImageBase + CurrentRVA);
 			return true;
 		}
-		Tables.Reserve(TableSize);
-		_ReLibData.LoggingCallback("Processing exception handler with %u table(s) (at 0x%p)\n", TableSize, NTHeaders.OptionalHeader.ImageBase + pFunc->UnwindData);
-		for (int i = 0; i < TableSize; i++) {
-			Tables.Push(ReadRVA<C_SCOPE_TABLE>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD) * 2 + sizeof(C_SCOPE_TABLE) * i));
+
+		// Insert handler RVA
+		iSection = FindSectionByRVA(CurrentRVA);
+		iInsert = FindPosition(iSection, CurrentRVA);
+		if (iSection == _UI16_MAX || iInsert == _UI32_MAX || iInsert == _UI32_MAX - 1) {
+			_ReLibData.WarningCallback("Failed to insert handler RVA at 0x%08llx\n", NTHeaders.OptionalHeader.ImageBase + CurrentRVA);
+		} else {
+			Line ptr;
+			ptr.Type = Pointer;
+			ptr.OldRVA = CurrentRVA;
+			ptr.Pointer.IsAbs = false;
+			ptr.Pointer.RVA = HandlerRVA;
+			Sections[iSection].Lines->Insert(iInsert, ptr);
+		}
+		
+		// Scope table
+		Vector<DWORD> TableRVAs;
+		DWORD TableSize = ReadRVA<DWORD>(CurrentRVA + sizeof(DWORD));
+		//if ((!EndingRVA && TableSize <= 100) || CurrentRVA + sizeof(DWORD) * 2 + sizeof(C_SCOPE_TABLE) * TableSize <= EndingRVA) {
+		if (TableSize <= 10) {
+			TableRVAs.Reserve(TableSize * 4);
+			_ReLibData.LoggingCallback("Processing exception handler with %u table(s) (at 0x%p)\n", TableSize, NTHeaders.OptionalHeader.ImageBase + Func.UnwindData);
+			for (int i = 0; i < TableSize * 4; i++) {
+				TableRVAs.Push(ReadRVA<DWORD>(CurrentRVA + sizeof(DWORD) * (2 + i)));
+			}
 		}
 
-		if (bFixAddr) {
-			WriteRVA<DWORD>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE), TranslateOldAddress(RVA));
+		// Disassemble handler
+		if (HandlerRVA && !DisasmRecursive(HandlerRVA)) return false;
 			
-			// Scope table
-			for (int i = 0; i < Tables.Size(); i++) {
-				C_SCOPE_TABLE t = Tables[i];
-				t.BeginAddress = TranslateOldAddress(Tables[i].BeginAddress);
-				t.EndAddress = TranslateOldAddress(Tables[i].EndAddress);
-				t.HandlerAddress = TranslateOldAddress(Tables[i].HandlerAddress);
-				t.JumpTarget = TranslateOldAddress(Tables[i].JumpTarget);
-				WriteRVA<C_SCOPE_TABLE>(pFunc->UnwindData + sizeof(UNWIND_INFO) + UnwindInfo.NumUnwindCodes * sizeof(UNWIND_CODE) + sizeof(DWORD) * 2 + sizeof(C_SCOPE_TABLE) * i, t);
-			}
-		} else {
-			if (RVA && !DisasmRecursive(RVA)) return false;
-			
-			// Scope table
-			for (int i = 0; i < Tables.Size(); i++) {
-				if (Tables[i].BeginAddress && !DisasmRecursive(Tables[i].BeginAddress)) return false;
-				if (Tables[i].EndAddress && !DisasmRecursive(Tables[i].EndAddress)) return false;
-				if (Tables[i].HandlerAddress && !DisasmRecursive(Tables[i].HandlerAddress)) return false;
-				if (Tables[i].JumpTarget && !DisasmRecursive(Tables[i].JumpTarget)) return false;
+		// Add scope table
+		iSection = FindSectionByRVA(CurrentRVA);
+		Line ptr;
+		ptr.Type = Pointer;
+		ptr.Pointer.IsAbs = false;
+		for (int i = 0; i < TableRVAs.Size(); i++) {
+			ptr.Pointer.RVA = TableRVAs[i];
+			ptr.OldRVA = CurrentRVA + sizeof(DWORD) * (2 + i);
+			if (TableRVAs[i] && !DisasmRecursive(TableRVAs[i])) {
+				_ReLibData.WarningCallback("Invalid C_SCOPE_TABLE member at 0x%08llx\n", NTHeaders.OptionalHeader.ImageBase + ptr.OldRVA);
+			} else {
+				iInsert = FindPosition(iSection, ptr.OldRVA);
+				if (iInsert != _UI32_MAX && iInsert != _UI32_MAX - 1) {
+					Sections[iSection].Lines->Insert(iInsert, ptr);
+				} else {
+					_ReLibData.WarningCallback("Failed to insert C_SCOPE_TABLE member at 0x%08llx\n", NTHeaders.OptionalHeader.ImageBase + ptr.OldRVA);
+				}
 			}
 		}
-		Tables.Release();
+		TableRVAs.Release();
 	}
 	return true;
 }
 
-RELIB_EXPORT bool Asm::Disassemble(_In_ bool bReturnIfFailed) {
+RELIB_EXPORT bool Asm::Disassemble(_In_ bool bDoFinalErrorCheck, _In_ bool bReturnIfFailed) {
 	if (Status) {
 		_ReLibData.ErrorCallback("Could not begin disassembly, as no binary is loaded (%hhd)\n", Status);
 		return false;
@@ -1048,15 +1092,10 @@ RELIB_EXPORT bool Asm::Disassemble(_In_ bool bReturnIfFailed) {
 	_ReLibData.LoggingCallback("Disassembling exception directory\n");
 	IMAGE_DATA_DIRECTORY ExcDataDir = NTHeaders.OptionalHeader.DataDirectory[3];
 	if (ExcDataDir.VirtualAddress) {
-		Buffer ExcData = SectionData[FindSectionByRVA(ExcDataDir.VirtualAddress)];
-		IMAGE_SECTION_HEADER ExcSecHeader = SectionHeaders[FindSectionByRVA(ExcDataDir.VirtualAddress)];
-		if (ExcData.Data() && ExcSecHeader.VirtualAddress && ExcDataDir.VirtualAddress - ExcSecHeader.VirtualAddress + ExcDataDir.Size < ExcData.Size()) {
-			RUNTIME_FUNCTION* pArray = reinterpret_cast<RUNTIME_FUNCTION*>(ExcData.Data() + ExcDataDir.VirtualAddress - ExcSecHeader.VirtualAddress);
-			for (uint32_t i = 0, n = ExcDataDir.Size / sizeof(RUNTIME_FUNCTION); i < n; i++) {
-				if (!CheckRuntimeFunction(&pArray[i])) {
-					_ReLibData.ErrorCallback("Failed to check RUNTIME_FUNCTION at 0x%p\n", &pArray[i]);
-					if (bReturnIfFailed) return false;
-				}
+		for (uint32_t i = 0; i < ExcDataDir.Size; i += sizeof(RUNTIME_FUNCTION)) {
+			if (!CheckRuntimeFunction(ExcDataDir.VirtualAddress + i /* , i + sizeof(RUNTIME_FUNCTION) < ExcDataDir.Size ? ExcDataDir.VirtualAddress + i + sizeof(RUNTIME_FUNCTION) : 0 */)) {
+				_ReLibData.ErrorCallback("Failed to check RUNTIME_FUNCTION at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + ExcDataDir.VirtualAddress + i);
+				if (bReturnIfFailed) return false;
 			}
 		}
 	}
@@ -1117,7 +1156,8 @@ RELIB_EXPORT bool Asm::Disassemble(_In_ bool bReturnIfFailed) {
 		// Insert prepended data
 		line.Type = Embed;
 		if (Lines->At(0).OldRVA > Sections[i].OldRVA) {
-			if (!bExecutable || !ReadRVA<WORD>(Sections[i].OldRVA) || !DisasmRecursive(Sections[i].OldRVA)) {
+			WORD dat = ReadRVA<WORD>(Sections[i].OldRVA);
+			if (!bExecutable || !dat || dat == 0x9090 || !DisasmRecursive(Sections[i].OldRVA)) {
 				line.OldRVA = Sections[i].OldRVA;
 				line.Embed.Size = Lines->At(0).OldRVA - Sections[i].OldRVA;
 				Lines->Insert(0, line);
@@ -1130,7 +1170,8 @@ RELIB_EXPORT bool Asm::Disassemble(_In_ bool bReturnIfFailed) {
 		for (int j = 0; j < Lines->Size() - 1; j++) {
 			line.OldRVA = Lines->At(j).OldRVA + GetLineSize(Lines->At(j));
 			if (line.OldRVA < Lines->At(j + 1).OldRVA) {
-				if (bExecutable && ReadRVA<WORD>(line.OldRVA) && DisasmRecursive(line.OldRVA)) {
+				WORD dat = ReadRVA<WORD>(line.OldRVA);
+				if (bExecutable && dat && dat != 0x9090 && DisasmRecursive(line.OldRVA)) {
 					j--;
 				} else {
 					line.Embed.Size = Lines->At(j + 1).OldRVA - line.OldRVA;
@@ -1143,7 +1184,8 @@ RELIB_EXPORT bool Asm::Disassemble(_In_ bool bReturnIfFailed) {
 		// Insert ending data
 		line.OldRVA = Lines->At(Lines->Size() - 1).OldRVA + GetLineSize(Lines->At(Lines->Size() - 1));
 		if (line.OldRVA - Sections[i].OldRVA < SectionHeaders[i].SizeOfRawData && line.OldRVA - Sections[i].OldRVA < Sections[i].OldSize) {
-			if (!bExecutable || !ReadRVA<WORD>(line.OldRVA) || !DisasmRecursive(line.OldRVA)) {
+			WORD dat = ReadRVA<WORD>(line.OldRVA);
+			if (!bExecutable || !dat || dat == 0x9090 || !DisasmRecursive(line.OldRVA)) {
 				line.Embed.Size = ((Sections[i].OldSize < SectionHeaders[i].SizeOfRawData) ? Sections[i].OldSize : SectionHeaders[i].SizeOfRawData) - (line.OldRVA - Sections[i].OldRVA);
 				Lines->Push(line);
 			}
@@ -1158,21 +1200,23 @@ RELIB_EXPORT bool Asm::Disassemble(_In_ bool bReturnIfFailed) {
 	_ReLibData.LoggingCallback("Finished disassembly\n");
 
 	// Error check
-	for (size_t i = 0; i < Sections.Size(); i++) {
-		if (Sections[i].OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
-			_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Sections[i].OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
-			return false;
-		}
-		Vector<Line>* Lines = Sections[i].Lines;
-		RELIB_ASSERT(Lines != NULL);
-		for (size_t j = 0; j < Lines->Size(); j++) {
-			if (Lines->At(j).OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
-				_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
+	if (bDoFinalErrorCheck) {
+		for (size_t i = 0; i < Sections.Size(); i++) {
+			if (Sections[i].OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
+				_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Sections[i].OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
 				return false;
 			}
-			if (j < Lines->Size() - 1 && Lines->At(j).OldRVA + GetLineSize(Lines->At(j)) != Lines->At(j + 1).OldRVA) {
-				_ReLibData.ErrorCallback("Validation failed, 0x%p + %u != 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, GetLineSize(Lines->At(j)), NTHeaders.OptionalHeader.ImageBase + Lines->At(j + 1).OldRVA);
-				return false;
+			Vector<Line>* Lines = Sections[i].Lines;
+			RELIB_ASSERT(Lines != NULL);
+			for (size_t j = 0; j < Lines->Size(); j++) {
+				if (Lines->At(j).OldRVA > NTHeaders.OptionalHeader.SizeOfImage) {
+					_ReLibData.ErrorCallback("Validation failed, 0x%p > 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, NTHeaders.OptionalHeader.ImageBase + NTHeaders.OptionalHeader.SizeOfImage);
+					return false;
+				}
+				if (j < Lines->Size() - 1 && Lines->At(j).OldRVA + GetLineSize(Lines->At(j)) != Lines->At(j + 1).OldRVA) {
+					_ReLibData.ErrorCallback("Validation failed, 0x%p + %u != 0x%p\n", NTHeaders.OptionalHeader.ImageBase + Lines->At(j).OldRVA, GetLineSize(Lines->At(j)), NTHeaders.OptionalHeader.ImageBase + Lines->At(j + 1).OldRVA);
+					return false;
+				}
 			}
 		}
 	}
@@ -1481,19 +1525,6 @@ RELIB_EXPORT bool Asm::Assemble() {
 	SectionHeaders.Push(RelocHeader);
 	SectionData.Push(relocs);
 	NTHeaders.FileHeader.NumberOfSections++;
-
-	// Fix exception data
-	IMAGE_DATA_DIRECTORY ExcDataDir = NTHeaders.OptionalHeader.DataDirectory[3];
-	if (ExcDataDir.VirtualAddress) {
-		Buffer ExcData = SectionData[FindSectionByRVA(ExcDataDir.VirtualAddress)];
-		IMAGE_SECTION_HEADER ExcSecHeader = SectionHeaders[FindSectionByRVA(ExcDataDir.VirtualAddress)];
-		if (ExcData.Data() && ExcSecHeader.VirtualAddress && ExcDataDir.VirtualAddress - ExcSecHeader.VirtualAddress + ExcDataDir.Size < ExcData.Size()) {
-			RUNTIME_FUNCTION* pArray = reinterpret_cast<RUNTIME_FUNCTION*>(ExcData.Data() + ExcDataDir.VirtualAddress - ExcSecHeader.VirtualAddress);
-			for (DWORD i = 0, n = ExcDataDir.Size / sizeof(RUNTIME_FUNCTION); i < n; i++) {
-				CheckRuntimeFunction(&pArray[i], true);
-			}
-		}
-	}
 
 	// Fix function ranges
 	for (int i = 0; i < FunctionRanges.Size(); i++) {

@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-08-31
+ * @date 2025-11-06
  * @copyright MIT License
  * @bug Crashes due to `_pei386_runtime_relocator`.
  */
@@ -173,7 +173,7 @@ private:
 	 * @retval true Success.
 	 * @retval false Failure.
 	 */
-	RELIB_EXPORT bool CheckRuntimeFunction(_In_ RUNTIME_FUNCTION* pFunc, _In_ bool bFixAddr = false);
+	RELIB_EXPORT bool CheckRuntimeFunction(_In_ DWORD FuncRVA);
 
 	/*!
 	 * @brief Get the next original line.
@@ -320,7 +320,7 @@ public:
 	 * @retval true Success.
 	 * @retval false Failure.
 	 */
-	RELIB_EXPORT bool Disassemble(_In_ bool bReturnIfFailed = false);
+	RELIB_EXPORT bool Disassemble(_In_ bool bDoFinalErrorCheck = true, _In_ bool bReturnIfFailed = false);
 
 	/*!
 	 * @brief Assembles application.
