@@ -1280,14 +1280,14 @@ RELIB_EXPORT bool Asm::FromDis(_In_ Line* pLine, _In_opt_ Label* pLabel) {
 	// Special instructions
 	if (!pLine->Decoded.Instruction.operand_count_visible) {
 		switch (pLine->Decoded.Instruction.mnemonic) {
-		case ZYDIS_MNEMONIC_MOVSB: return pAsm->movsb();
-		case ZYDIS_MNEMONIC_MOVSW: return pAsm->movsw();
-		case ZYDIS_MNEMONIC_MOVSD: return pAsm->movsd();
-		case ZYDIS_MNEMONIC_MOVSQ: return pAsm->movsq();
-		case ZYDIS_MNEMONIC_STOSB: return pAsm->stosb();
-		case ZYDIS_MNEMONIC_STOSW: return pAsm->stosw();
-		case ZYDIS_MNEMONIC_STOSD: return pAsm->stosd();
-		case ZYDIS_MNEMONIC_STOSQ: return pAsm->stosq();
+		case ZYDIS_MNEMONIC_MOVSB: return !pAsm->movsb();
+		case ZYDIS_MNEMONIC_MOVSW: return !pAsm->movsw();
+		case ZYDIS_MNEMONIC_MOVSD: return !pAsm->movsd();
+		case ZYDIS_MNEMONIC_MOVSQ: return !pAsm->movsq();
+		case ZYDIS_MNEMONIC_STOSB: return !pAsm->stosb();
+		case ZYDIS_MNEMONIC_STOSW: return !pAsm->stosw();
+		case ZYDIS_MNEMONIC_STOSD: return !pAsm->stosd();
+		case ZYDIS_MNEMONIC_STOSQ: return !pAsm->stosq();
 		}
 	}
 
@@ -1413,7 +1413,14 @@ RELIB_EXPORT bool Asm::Assemble() {
 				}
 
 				// Encode
-				FromDis(&line, rel >= 0 ? &ah : NULL);
+				if (!FromDis(&line, (rel >= 0 && !abs) ? &ah : NULL, abs)) {
+					XREFs.Release();
+					XREFLabels.Release();
+					LinkLater.Release();
+					LinkLaterOffsets.Release();
+					_ReLibData.ErrorCallback("Failed to assemble instruction at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + line.OldRVA);
+					return false;
+				}
 				break;
 			}
 			case Embed: {
