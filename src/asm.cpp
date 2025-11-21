@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-11-06
+ * @date 2025-11-21
  * @copyright MIT License
  */
 
@@ -593,98 +593,130 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 			fProgress = (float)Progress / (float)ToDo;
 
 			TempLines.Push(CraftedLine);
-
-			// Jump table chance modification
-			switch (JumpTableChance.instCount) {
-			case 1:
-				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOVZX && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER) {
-					JumpTableChance.instCount = 2;
-					break;
-				}
-				JumpTableChance.instCount = 0;
-				break;
-			case 2:
-				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOVSXD && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && CraftedLine.Decoded.Operands[1].mem.base == JumpTableChance.array_reg && CraftedLine.Decoded.Operands[1].mem.scale == 2) {
-					JumpTableChance.instCount = 3;
-					JumpTableChance.dest_reg = CraftedLine.Decoded.Operands[0].reg.value;
-					break;
-				}
-				JumpTableChance.instCount = 0;
-				break;
-			case 3:
-				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_ADD && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[0].reg.value == JumpTableChance.dest_reg && CraftedLine.Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[1].reg.value == JumpTableChance.array_reg) {
-					JumpTableChance.instCount = 4;
-					break;
-				}
-				JumpTableChance.instCount = 0;
-				break;
-			case 4:
-				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_JMP && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && CraftedLine.Decoded.Operands[0].reg.value == JumpTableChance.dest_reg) {
-					DWORD trva = 0, rva = 0, disp = 0, odisp = 0;
-					{
-						uint64_t r;
-						ZydisCalcAbsoluteAddress(&JumpTableChance.first, &JumpTableChance.ptr, JumpTableChance.dwRVA, &r);
-						disp = odisp = r;
-					}
-
-					do {
-						rva = ReadRVA<DWORD>(disp);
-						if (!rva) break;
-						trva = odisp + rva;
-						if (!(trva != 0xCCCCCCCC && trva >= Sections[SectionIndex].OldRVA && trva < Sections[SectionIndex].OldRVA + Sections[SectionIndex].OldSize)) break;
-						if (!JumpTables.Includes(trva)) JumpTables.Push(trva);
-						Line TempJumpTable;
-						TempJumpTable.OldRVA = disp;
-						TempJumpTable.Type = JumpTable;
-						TempJumpTable.bRelative = true;
-						TempJumpTable.JumpTable.Value = rva;
-						TempJumpTable.JumpTable.Base = odisp;
-						WORD SecIndex = FindSectionIndex(disp);
-						DWORD i = FindPosition(SecIndex, disp);
-						if (i == _UI32_MAX) {
-							_ReLibData.ErrorCallback("Failed to find position for 0x%p\n", NTHeaders.OptionalHeader.ImageBase + disp);
-							return false;
-						}
-						if (i != _UI32_MAX - 1) Sections[SecIndex].Lines->Insert(i, TempJumpTable);
-						disp += sizeof(DWORD);
-					} while (1);
-				}
-				__fallthrough;
-			default:
-				JumpTableChance.instCount = 0;
-				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_LEA && CraftedLine.Decoded.Operands[1].mem.base == ZYDIS_REGISTER_RIP) {
-					JumpTableChance.instCount = 1;
-					JumpTableChance.array_reg = CraftedLine.Decoded.Operands[0].reg.value;
-					JumpTableChance.ptr = CraftedLine.Decoded.Operands[1];
-					JumpTableChance.first = CraftedLine.Decoded.Instruction;
-					JumpTableChance.dwRVA = CraftedLine.OldRVA;
-				}
-			}
 			
 			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_RET || CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_INT3) break;
-
-			// Check if is jump table
-			if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOV && CraftedLine.Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && CraftedLine.Decoded.Operands[1].mem.scale == 4 && CraftedLine.Decoded.Operands[1].mem.base != ZYDIS_REGISTER_RIP) {
-				DWORD rva = 0;
-				DWORD disp = CraftedLine.Decoded.Operands[1].mem.disp.value;
-				while ((rva = ReadRVA<DWORD>(disp)) != 0xCCCCCCCC && rva >= Sections[SectionIndex].OldRVA && rva < Sections[SectionIndex].OldRVA + Sections[SectionIndex].OldSize) {
-					if (!JumpTables.Includes(rva)) JumpTables.Push(rva);
-					Line TempJumpTable;
-					TempJumpTable.OldRVA = disp;
-					TempJumpTable.Type = JumpTable;
-					TempJumpTable.JumpTable.Value = rva;
-					WORD SecIndex = FindSectionIndex(disp);
-					DWORD i = FindPosition(SecIndex, disp);
-					if (i == _UI32_MAX) {
-						_ReLibData.ErrorCallback("Failed to find position for 0x%p\n", NTHeaders.OptionalHeader.ImageBase + disp);
-						return false;
-					}
-					if (i != _UI32_MAX - 1) Sections[SecIndex].Lines->Insert(i, TempJumpTable);
-					disp += sizeof(DWORD);
-				}
-			}
  
 			if (IsInstructionCF(CraftedLine.Decoded.Instruction.mnemonic)) {
+				// Jump table detection
+				if (CraftedLine.Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_JMP && CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER) {
+					// Walk backwards on current block
+					ZydisRegister TableBase = ZYDIS_REGISTER_NONE;
+					uint64_t JumpTableAddress = 0;
+					uint64_t PotentialBase = 0;
+					uint64_t NumItems = 0;
+					bool bRelativeToBase = false;
+					bool bWorking = true;
+					for (int i = TempLines.Size() - 1; i >= 0; i--) {
+						if (((bRelativeToBase && PotentialBase) || JumpTableAddress) && NumItems) break;
+
+						if (TempLines[i].Type != Decoded) {
+							_ReLibData.WarningCallback("Switch at %p failed (type 0)\n", NTHeaders.OptionalHeader.ImageBase + CraftedLine.OldRVA);
+							bWorking = false;
+							break;
+						}
+						
+						// Get register containing the base
+						if (!JumpTableAddress && TempLines[i].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_ADD && TempLines[i].Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && TempLines[i].Decoded.Operands[0].reg.value == CraftedLine.Decoded.Operands[0].reg.value) {
+							if (TableBase != ZYDIS_REGISTER_NONE || TempLines[i].Decoded.Operands[1].type != ZYDIS_OPERAND_TYPE_REGISTER) {
+								_ReLibData.WarningCallback("Switch at %p failed (type 1)\n", NTHeaders.OptionalHeader.ImageBase + CraftedLine.OldRVA);
+								bWorking = false;
+								break;
+							}
+							TableBase = TempLines[i].Decoded.Operands[1].reg.value;
+							_ReLibData.LoggingCallback("TableBase = %hd\n", TableBase);
+						}
+
+						// Get the base
+						if (!JumpTableAddress && TempLines[i].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_LEA && TempLines[i].Decoded.Operands[0].reg.value == TableBase) {
+							ZydisDecodedInstruction inst = TempLines[i].Decoded.Instruction;
+							ZydisDecodedOperand op = TempLines[i].Decoded.Operands[1];
+							if (ZYAN_FAILED(ZydisCalcAbsoluteAddress(&inst, &op, TempLines[i].OldRVA, &JumpTableAddress))) {
+								_ReLibData.WarningCallback("Switch at %p failed (type 2)\n", NTHeaders.OptionalHeader.ImageBase + CraftedLine.OldRVA);
+								bWorking = false;
+								break;
+							}
+							_ReLibData.LoggingCallback("Predicted jump table at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
+							if (!JumpTableAddress) {
+								JumpTableAddress = -1;
+								bRelativeToBase = true;
+							}
+						}
+
+						// Get other stuff
+						if ((TempLines[i].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOV || TempLines[i].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_MOVSXD) && TempLines[i].Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY) {
+							if (!JumpTableAddress && TempLines[i].Decoded.Operands[1].mem.disp.has_displacement && TempLines[i].Decoded.Operands[1].mem.base != ZYDIS_REGISTER_NONE && TempLines[i].Decoded.Operands[1].mem.index != ZYDIS_REGISTER_NONE && TempLines[i].Decoded.Operands[1].mem.scale == 4 && !PotentialBase) {
+								PotentialBase = TempLines[i].Decoded.Operands[1].mem.disp.value;
+								bRelativeToBase = true;
+								_ReLibData.LoggingCallback("PotentialBase = %p\n", NTHeaders.OptionalHeader.ImageBase + PotentialBase);
+							}
+						}
+
+						// Get bounds
+						if (!NumItems && TempLines[i].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_JNBE && i > 0 && TempLines[i - 1].Type == Decoded && TempLines[i - 1].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_CMP && TempLines[i - 1].Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
+							NumItems = TempLines[i - 1].Decoded.Operands[1].imm.is_signed ? TempLines[i - 1].Decoded.Operands[1].imm.value.s : TempLines[i - 1].Decoded.Operands[1].imm.value.u;
+							_ReLibData.LoggingCallback("NumItems = %lld\n", NumItems);
+						}
+					}
+
+					if (bRelativeToBase) JumpTableAddress = PotentialBase;
+
+					// Add jump table entries
+					if (bWorking && JumpTableAddress) {
+						if (!NumItems) {
+							_ReLibData.WarningCallback("Jump table at %p has an unknown number of cases.\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
+							bWorking = false;
+						}
+						Line TempJumpTable;
+						TempJumpTable.Type = JumpTable;
+						TempJumpTable.bRelative = !bRelativeToBase;
+						TempJumpTable.JumpTable.Base = bRelativeToBase ? 0 : JumpTableAddress;
+						WORD dwSec = FindSectionByRVA(bRelativeToBase ? PotentialBase : JumpTableAddress);
+						if (dwSec == _UI16_MAX) {
+							_ReLibData.WarningCallback("Failed to insert jump table contents at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
+						} else {
+							DWORD i = 0;
+							while (!bWorking || NumItems) {
+								// Get jump table case
+								TempJumpTable.OldRVA = JumpTableAddress;
+								TempJumpTable.JumpTable.Value = ReadRVA<DWORD>(JumpTableAddress);
+								WORD dwCaseSec = FindSectionByRVA(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base));
+								if (dwCaseSec == _UI16_MAX || ~SectionHeaders[dwCaseSec].Characteristics & IMAGE_SCN_MEM_EXECUTE) {
+									if (bWorking) _ReLibData.WarningCallback("Jump table %p ran into invalid value at %p\n", NTHeaders.OptionalHeader.ImageBase + TempJumpTable.JumpTable.Base, NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
+									break;
+								}
+								
+								// Insert data
+								i = FindPosition(dwSec, JumpTableAddress);
+								if (i == _UI32_MAX) {
+									_ReLibData.WarningCallback("Failed to insert jump case at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
+								} else if (bWorking && i == _UI32_MAX - 1) {
+									_ReLibData.WarningCallback("Jump table overriding data at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
+									
+									// Remove it from the jump table index so the old version doesnt get disassembled
+									DWORD t = FindIndex(dwSec, JumpTableAddress);
+									if (Sections[dwSec].Lines->At(t).Type == JumpTable) {
+										int j = JumpTables.Find(Sections[dwSec].Lines->At(t).JumpTable.Value + (bRelativeToBase ? Sections[dwSec].Lines->At(t).bRelative : Sections[dwSec].Lines->At(t).JumpTable.Base));
+										if (j != -1) JumpTables.Remove(j);
+									}
+									
+									// Overwrite it if a less accurate switch parser dealt with it
+									Sections[dwSec].Lines->Remove(t);
+									Sections[dwSec].Lines->Insert(FindPosition(dwSec, JumpTableAddress), TempJumpTable);
+									if (!JumpTables.Includes(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base)))
+										JumpTables.Push(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base));
+								} else if (i != _UI32_MAX - 1) {
+									Sections[dwSec].Lines->Insert(i, TempJumpTable);
+									if (!JumpTables.Includes(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base)))
+										JumpTables.Push(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base));
+								}
+								
+								JumpTableAddress += sizeof(DWORD);
+								NumItems--;
+							}
+						}
+					}
+				}
+
 				// Calculate absolute address
 				if (!((CraftedLine.Decoded.Operands[0].type != ZYDIS_OPERAND_TYPE_MEMORY && CraftedLine.Decoded.Operands[0].type != ZYDIS_OPERAND_TYPE_IMMEDIATE) || (CraftedLine.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_MEMORY && (CraftedLine.Decoded.Operands[0].mem.base != ZYDIS_REGISTER_RIP && CraftedLine.Decoded.Operands[0].mem.base != ZYDIS_REGISTER_NONE)))) {
 					uint64_t u64Referencing = 0;
@@ -780,7 +812,15 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 		}
 
 		// Insert lines
-		if (!TempLines.Size()) _ReLibData.WarningCallback("Attempted to disassemble but got nothing\n");
+		if (!TempLines.Size()) {
+			_ReLibData.WarningCallback("Attempted to disassemble but got nothing\n");
+			continue;
+		}
+		i = FindPosition(SectionIndex, TempLines[0].OldRVA);
+		if (i > Lines->Size() || i == _UI32_MAX || i == _UI32_MAX - 1) {
+			_ReLibData.WarningCallback("Re-checked insertion position and it\'s now invalid\n");
+			continue;
+		}
 		Lines->Insert(i, TempLines);
 	} while (ToDisasm.Size());
 
