@@ -1366,12 +1366,13 @@ RELIB_EXPORT bool Asm::Assemble() {
 	Vector<QWORD> LinkLaterOffsets;
 
 	// Assemble sections
+	pAsm->dq(0, SectionHeaders[0].VirtualAddress / 8);
 	for (DWORD SecIndex = 0; SecIndex < Sections.Size(); SecIndex++) {
 		// Prepare next section
 		AsmSection section = Sections[SecIndex];
 		pLines = section.Lines;
 		RELIB_ASSERT(pLines != NULL);
-		section.NewRVA = pAsm->offset() + SectionHeaders[0].VirtualAddress;
+		section.NewRVA = pAsm->offset();
 		DWORD rva = section.NewRVA;
 		section.NewRawSize = 0;
 		section.NewVirtualSize = 0;
@@ -1387,24 +1388,30 @@ RELIB_EXPORT bool Asm::Assemble() {
 			switch (line.Type) {
 			case Decoded: {
 				// Calculate referenced address
-				int rel = -1;
 				uint64_t refs = 0;
 				Label ah;
 				if (IsInstructionCF(line.Decoded.Instruction.mnemonic) && line.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
-					rel = 0;
+					ZydisDecodedInstruction inst = line.Decoded.Instruction;
+					ZydisDecodedOperand op = line.Decoded.Operands[0];
+					if (ZYAN_FAILED(ZydisCalcAbsoluteAddress(&inst, &op, NTHeaders.OptionalHeader.ImageBase + line.OldRVA, &refs))) {
+						_ReLibData.WarningCallback("Failed to calculate absolute address at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + line.OldRVA);
+					}
 				} else {
 					for (int i = 0; i < line.Decoded.Instruction.operand_count_visible; i++) {
 						if (line.Decoded.Operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY && (line.Decoded.Operands[i].mem.base == ZYDIS_REGISTER_RIP || line.Decoded.Operands[i].mem.index == ZYDIS_REGISTER_RIP)) {
-							rel = i;
+							ZydisDecodedInstruction inst = line.Decoded.Instruction;
+							ZydisDecodedOperand op = line.Decoded.Operands[i];
+							if (ZYAN_FAILED(ZydisCalcAbsoluteAddress(&inst, &op, NTHeaders.OptionalHeader.ImageBase + line.OldRVA, &refs))) {
+								_ReLibData.WarningCallback("Failed to calculate absolute address at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + line.OldRVA);
+							}
 							break;
 						}
 					}
 				}
-				if (rel >= 0) {
-					refs = line.Decoded.refs;
-					int loc = XREFs.Find(refs);
+				if (refs) {
+					int loc = XREFs.Find(refs - NTHeaders.OptionalHeader.ImageBase);
 					if (loc < 0) {
-						XREFs.Push(refs);
+						XREFs.Push(refs - NTHeaders.OptionalHeader.ImageBase);
 						ah = pAsm->newLabel();
 						XREFLabels.Push(ah);
 					} else {
@@ -1413,7 +1420,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 				}
 
 				// Encode
-				if (!FromDis(&line, (rel >= 0 && !abs) ? &ah : NULL, abs)) {
+				if (!FromDis(&line, refs ? &ah : NULL)) {
 					XREFs.Release();
 					XREFLabels.Release();
 					LinkLater.Release();
@@ -1458,7 +1465,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 		}
 
 		// Finalize section
-		section.NewRawSize = pAsm->offset() - (section.NewRVA - SectionHeaders[0].VirtualAddress);
+		section.NewRawSize = pAsm->offset() - section.NewRVA;
 		section.NewRawSize -= section.NewVirtualSize;
 		section.NewVirtualSize += section.NewRawSize;
 		if (pAsm->offset() % NTHeaders.OptionalHeader.SectionAlignment) {
@@ -1501,7 +1508,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 		return false;
 	}
 	for (int i = 0; i < XREFs.Size(); i++) {
-		pAsm->code()->bindLabel(XREFLabels[i], pAsm->code()->textSection()->id(), TranslateOldAddress(XREFs[i]) - SectionHeaders[0].VirtualAddress);
+		pAsm->code()->bindLabel(XREFLabels[i], pAsm->code()->textSection()->id(), TranslateOldAddress(XREFs[i]));
 	}
 	XREFs.Release();
 	XREFLabels.Release();
@@ -1534,7 +1541,7 @@ RELIB_EXPORT bool Asm::Assemble() {
 	// Copy data
 	_ReLibData.LoggingCallback("Finalizing\n");
 	pAsm->code()->flatten();
-	pAsm->code()->relocateToBase(NTHeaders.OptionalHeader.ImageBase + SectionHeaders[0].VirtualAddress);
+	pAsm->code()->relocateToBase(NTHeaders.OptionalHeader.ImageBase);
 	_ReLibData.LoggingCallback("Assembled code has %d sections, and has %d relocations\n", pAsm->code()->sectionCount(), pAsm->code()->hasRelocEntries() ? pAsm->code()->relocEntries().size() : 0);
 	if (pAsm->code()->hasUnresolvedLinks()) pAsm->code()->resolveUnresolvedLinks();
 	if (pAsm->code()->hasUnresolvedLinks()) _ReLibData.WarningCallback("Assembled code has %d unsolved links\n", pAsm->code()->unresolvedLinkCount());
@@ -1547,11 +1554,11 @@ RELIB_EXPORT bool Asm::Assemble() {
 			i--;
 		}
 		buf.Allocate(Sections[i].NewRawSize);
-		if (pAsm->code()->textSection()->buffer().size() < Sections[i].NewRVA - SectionHeaders[0].VirtualAddress + buf.Size()) {
-			_ReLibData.ErrorCallback("Failed to read assembled code (size: 0x%p, expected: 0x%p)\n", pAsm->code()->textSection()->buffer().size(), Sections[i].NewRVA - SectionHeaders[0].VirtualAddress + buf.Size());
+		if (pAsm->code()->textSection()->buffer().size() < Sections[i].NewRVA + buf.Size()) {
+			_ReLibData.ErrorCallback("Failed to read assembled code (size: 0x%p, expected: 0x%p)\n", pAsm->code()->textSection()->buffer().size(), Sections[i].NewRVA + buf.Size());
 			return false;
 		}
-		memcpy_s(buf.Data(), buf.Size(), pAsm->code()->textSection()->buffer().data() + Sections[i].NewRVA - SectionHeaders[0].VirtualAddress, buf.Size());
+		memcpy_s(buf.Data(), buf.Size(), pAsm->code()->textSection()->buffer().data() + Sections[i].NewRVA, buf.Size());
 		SectionData[i] = buf;
 		IMAGE_SECTION_HEADER header = SectionHeaders[i];
 		header.VirtualAddress = Sections[i].NewRVA;
