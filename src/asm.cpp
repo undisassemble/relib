@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-11-21
+ * @date 2025-11-23
  * @copyright MIT License
  */
 
@@ -240,6 +240,7 @@ RELIB_EXPORT Asm::~Asm() {
 	}
 	Sections.Release();
 	JumpTables.Release();
+	JumpTableIndexers.Release();
 	FunctionRanges.Release();
 }
 
@@ -514,14 +515,6 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 	DWORD SectionIndex;
 	size_t szBufferOffset = 0;
 	bool bFailGracefully = false;
-	struct {
-		ZydisDecodedInstruction first;
-		ZydisDecodedOperand ptr;
-		ZydisRegister array_reg;
-		ZydisRegister dest_reg;
-		DWORD dwRVA = 0;
-		int instCount = 0;
-	} JumpTableChance;
 
 	do {
 		// Setup
@@ -623,7 +616,6 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 								break;
 							}
 							TableBase = TempLines[i].Decoded.Operands[1].reg.value;
-							_ReLibData.LoggingCallback("TableBase = %hd\n", TableBase);
 						}
 
 						// Get the base
@@ -647,14 +639,13 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 							if (!JumpTableAddress && TempLines[i].Decoded.Operands[1].mem.disp.has_displacement && TempLines[i].Decoded.Operands[1].mem.base != ZYDIS_REGISTER_NONE && TempLines[i].Decoded.Operands[1].mem.index != ZYDIS_REGISTER_NONE && TempLines[i].Decoded.Operands[1].mem.scale == 4 && !PotentialBase) {
 								PotentialBase = TempLines[i].Decoded.Operands[1].mem.disp.value;
 								bRelativeToBase = true;
-								_ReLibData.LoggingCallback("PotentialBase = %p\n", NTHeaders.OptionalHeader.ImageBase + PotentialBase);
+								JumpTableIndexers.Push(TempLines[i].OldRVA);
 							}
 						}
 
 						// Get bounds
 						if (!NumItems && TempLines[i].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_JNBE && i > 0 && TempLines[i - 1].Type == Decoded && TempLines[i - 1].Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_CMP && TempLines[i - 1].Decoded.Operands[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
-							NumItems = TempLines[i - 1].Decoded.Operands[1].imm.is_signed ? TempLines[i - 1].Decoded.Operands[1].imm.value.s : TempLines[i - 1].Decoded.Operands[1].imm.value.u;
-							_ReLibData.LoggingCallback("NumItems = %lld\n", NumItems);
+							NumItems = (TempLines[i - 1].Decoded.Operands[1].imm.is_signed ? TempLines[i - 1].Decoded.Operands[1].imm.value.s : TempLines[i - 1].Decoded.Operands[1].imm.value.u) + 1;
 						}
 					}
 
@@ -1150,8 +1141,6 @@ RELIB_EXPORT bool Asm::Disassemble(_In_ bool bDoFinalErrorCheck, _In_ bool bRetu
 			if (!DisasmRecursive(dwJumpTable)) {
 				_ReLibData.ErrorCallback("Failed to disassemble jump table at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + dwJumpTable);
 				if (bReturnIfFailed) return false;
-			} else {
-				_ReLibData.LoggingCallback("Disassembled jump table at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + dwJumpTable);
 			}
 		}
 		if (osize) _ReLibData.LoggingCallback("Disassembled %d switch cases\n", osize);
@@ -1390,13 +1379,20 @@ RELIB_EXPORT bool Asm::Assemble() {
 				// Calculate referenced address
 				uint64_t refs = 0;
 				Label ah;
+				ZydisRegister SubIndex = ZYDIS_REGISTER_NONE;
 				if (IsInstructionCF(line.Decoded.Instruction.mnemonic) && line.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
 					ZydisDecodedInstruction inst = line.Decoded.Instruction;
 					ZydisDecodedOperand op = line.Decoded.Operands[0];
 					if (ZYAN_FAILED(ZydisCalcAbsoluteAddress(&inst, &op, NTHeaders.OptionalHeader.ImageBase + line.OldRVA, &refs))) {
 						_ReLibData.WarningCallback("Failed to calculate absolute address at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + line.OldRVA);
 					}
-				} else {
+				} else if (JumpTableIndexers.Includes(line.OldRVA)) {
+					SubIndex = line.Decoded.Operands[0].reg.value;
+					refs = line.Decoded.Operands[1].mem.disp.value + NTHeaders.OptionalHeader.ImageBase;
+					line.Decoded.Operands[1].mem.base = SubIndex;
+					line.Decoded.Operands[1].mem.disp.value = 0;
+					line.Decoded.Operands[1].mem.disp.has_displacement = 0;
+			 	} else {
 					for (int i = 0; i < line.Decoded.Instruction.operand_count_visible; i++) {
 						if (line.Decoded.Operands[i].type == ZYDIS_OPERAND_TYPE_MEMORY && (line.Decoded.Operands[i].mem.base == ZYDIS_REGISTER_RIP || line.Decoded.Operands[i].mem.index == ZYDIS_REGISTER_RIP)) {
 							ZydisDecodedInstruction inst = line.Decoded.Instruction;
@@ -1408,6 +1404,8 @@ RELIB_EXPORT bool Asm::Assemble() {
 						}
 					}
 				}
+
+				// Find label for reference
 				if (refs) {
 					int loc = XREFs.Find(refs - NTHeaders.OptionalHeader.ImageBase);
 					if (loc < 0) {
@@ -1417,6 +1415,20 @@ RELIB_EXPORT bool Asm::Assemble() {
 					} else {
 						ah = XREFLabels[loc];
 					}
+				}
+
+				// Replace some jump table stuff
+				if (SubIndex != ZYDIS_REGISTER_NONE) {
+					Gpq base = reinterpret_cast<Gp*>(&ZydisToAsmJit::Registers[SubIndex])->r64();
+					Gpq index = reinterpret_cast<Gp*>(&ZydisToAsmJit::Registers[line.Decoded.Operands[1].mem.index])->r64();
+					pAsm->lea(base, ptr(ah));
+					int shift = line.Decoded.Operands[1].mem.scale;
+					shift = shift == 8 ? 3 : shift / 2;
+					pAsm->shl(index, shift);
+					pAsm->add(base, index);
+					pAsm->shr(index, shift);
+					line.Decoded.Operands[1].mem.index = ZYDIS_REGISTER_NONE;
+					line.Decoded.Operands[1].mem.scale = 1;
 				}
 
 				// Encode

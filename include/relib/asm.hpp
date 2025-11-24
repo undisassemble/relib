@@ -3,9 +3,8 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-11-06
+ * @date 2025-11-23
  * @copyright MIT License
- * @bug Crashes due to `_pei386_runtime_relocator`.
  */
 
 #pragma once
@@ -208,6 +207,7 @@ private:
 protected:
 	Vector<AsmSection> Sections;          //!< List of sections.
 	Vector<DWORD> JumpTables;             //!< Jump table RVAs that have not yet been disassembled.
+	Vector<DWORD> JumpTableIndexers;      //!< RVAs of instructions that get jump cases and need their RVAs fixed (i.e. mov r9d, [r10 + r8 * 4 + 0x1F9A0])
 	ZydisDecoder Decoder;                 //!< Decoder instance.
 	Vector<DWORD> Functions;              //!< Known function entries referenced in code.
 	Vector<FunctionRange> FunctionRanges; //!< Functions found via FindFunctions.
