@@ -196,7 +196,7 @@ RELIB_EXPORT DecodedOperand::operator ZydisDecodedOperand() const {
 		break;
 	case ZYDIS_OPERAND_TYPE_IMMEDIATE:
 		ret.imm.is_signed = imm.is_signed;
-		ret.imm.is_relative = true;
+		ret.imm.is_relative = false;
 		ret.imm.value.u = imm.value.u;
 		break;
 	case ZYDIS_OPERAND_TYPE_POINTER:
