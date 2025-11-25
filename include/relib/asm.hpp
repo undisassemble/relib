@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Disassembly related definitions
  * @version 0.0.0
- * @date 2025-11-23
+ * @date 2025-11-25
  * @copyright MIT License
  */
 
@@ -96,7 +96,7 @@ struct Line {
 		} Padding;
 		struct {
 			DWORD Value;                    //!< RVA that the jump table references.
-			DWORD Base;                     //!< Base added to `Value` when `bRelative` is set.
+			DWORD Base;                     //!< Base added to `Value` when `bRelative` is set, otherwise it's the address of the first case in the table.
 		} JumpTable;
 		struct {
 			union {

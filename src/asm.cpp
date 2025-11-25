@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-11-23
+ * @date 2025-11-25
  * @copyright MIT License
  */
 
@@ -660,7 +660,7 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 						Line TempJumpTable;
 						TempJumpTable.Type = JumpTable;
 						TempJumpTable.bRelative = !bRelativeToBase;
-						TempJumpTable.JumpTable.Base = bRelativeToBase ? 0 : JumpTableAddress;
+						TempJumpTable.JumpTable.Base = JumpTableAddress;
 						WORD dwSec = FindSectionByRVA(bRelativeToBase ? PotentialBase : JumpTableAddress);
 						if (dwSec == _UI16_MAX) {
 							_ReLibData.WarningCallback("Failed to insert jump table contents at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
@@ -680,21 +680,24 @@ RELIB_EXPORT bool Asm::DisasmRecursive(_In_ DWORD dwRVA) {
 								i = FindPosition(dwSec, JumpTableAddress);
 								if (i == _UI32_MAX) {
 									_ReLibData.WarningCallback("Failed to insert jump case at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
-								} else if (bWorking && i == _UI32_MAX - 1) {
-									_ReLibData.WarningCallback("Jump table overriding data at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
-									
-									// Remove it from the jump table index so the old version doesnt get disassembled
+								} else if (i == _UI32_MAX - 1) {
 									DWORD t = FindIndex(dwSec, JumpTableAddress);
-									if (Sections[dwSec].Lines->At(t).Type == JumpTable) {
-										int j = JumpTables.Find(Sections[dwSec].Lines->At(t).JumpTable.Value + (bRelativeToBase ? Sections[dwSec].Lines->At(t).bRelative : Sections[dwSec].Lines->At(t).JumpTable.Base));
-										if (j != -1) JumpTables.Remove(j);
-									}
 									
-									// Overwrite it if a less accurate switch parser dealt with it
-									Sections[dwSec].Lines->Remove(t);
-									Sections[dwSec].Lines->Insert(FindPosition(dwSec, JumpTableAddress), TempJumpTable);
-									if (!JumpTables.Includes(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base)))
-										JumpTables.Push(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base));
+									if (bWorking || (Sections[dwSec].Lines->At(t).Type == JumpTable  && Sections[dwSec].Lines->At(t).JumpTable.Base < TempJumpTable.JumpTable.Base)) {
+										_ReLibData.WarningCallback("Jump table overriding data at %p\n", NTHeaders.OptionalHeader.ImageBase + JumpTableAddress);
+										
+										// Remove it from the jump table index so the old version doesnt get disassembled
+										if (Sections[dwSec].Lines->At(t).Type == JumpTable) {
+											int j = JumpTables.Find(Sections[dwSec].Lines->At(t).JumpTable.Value + (bRelativeToBase ? Sections[dwSec].Lines->At(t).bRelative : Sections[dwSec].Lines->At(t).JumpTable.Base));
+											if (j != -1) JumpTables.Remove(j);
+										}
+										
+										// Overwrite it if a less accurate switch parser dealt with it
+										Sections[dwSec].Lines->Remove(t);
+										Sections[dwSec].Lines->Insert(FindPosition(dwSec, JumpTableAddress), TempJumpTable);
+										if (!JumpTables.Includes(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base)))
+											JumpTables.Push(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base));
+									}
 								} else if (i != _UI32_MAX - 1) {
 									Sections[dwSec].Lines->Insert(i, TempJumpTable);
 									if (!JumpTables.Includes(TempJumpTable.JumpTable.Value + (bRelativeToBase ? 0 : TempJumpTable.JumpTable.Base)))
