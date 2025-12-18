@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief Assembly related functions
  * @version 0.0.0
- * @date 2025-11-25
+ * @date 2025-12-18
  * @copyright MIT License
  */
 
@@ -1386,6 +1386,8 @@ RELIB_EXPORT bool Asm::Assemble() {
 				if (IsInstructionCF(line.Decoded.Instruction.mnemonic) && line.Decoded.Operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE) {
 					ZydisDecodedInstruction inst = line.Decoded.Instruction;
 					ZydisDecodedOperand op = line.Decoded.Operands[0];
+					op.imm.is_relative = true;
+					op.imm.is_signed = true;
 					if (ZYAN_FAILED(ZydisCalcAbsoluteAddress(&inst, &op, NTHeaders.OptionalHeader.ImageBase + line.OldRVA, &refs))) {
 						_ReLibData.WarningCallback("Failed to calculate absolute address at 0x%p\n", NTHeaders.OptionalHeader.ImageBase + line.OldRVA);
 					}
