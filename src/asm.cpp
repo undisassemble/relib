@@ -1329,6 +1329,17 @@ RELIB_EXPORT bool Asm::FromDis(_In_ Line* pLine, _In_opt_ Label* pLabel) {
 		_ReLibData.WarningCallback("Unable to process all operands\n");
 	}
 
+	// Stuff that needs to be converted
+	if (
+		pLine->Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_FCOMI ||
+		pLine->Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_FCOMIP ||
+		pLine->Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_FUCOMI ||
+		pLine->Decoded.Instruction.mnemonic == ZYDIS_MNEMONIC_FUCOMIP
+	) {
+		ops[0] = ops[1];
+		ops[1] = { 0 };
+	}
+
 	return !pAsm->_emit(mnem, ops[0], ops[1], ops[2], &ops[3]);
 }
 
