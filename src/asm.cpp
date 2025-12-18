@@ -1496,6 +1496,10 @@ RELIB_EXPORT bool Asm::Assemble() {
 	_ReLibData.LoggingCallback("Linking\n");
 	if (LinkLater.Size() != LinkLaterOffsets.Size()) {
 		_ReLibData.ErrorCallback("This should never happen (LinkLater.Size() != LinkLaterOffsets.Size())\n");
+		LinkLater.Release();
+		LinkLaterOffsets.Release();
+		XREFs.Release();
+		XREFLabels.Release();
 		return false;
 	}
 	for (int i = 0; i < LinkLater.Size(); i++) {
@@ -1515,6 +1519,10 @@ RELIB_EXPORT bool Asm::Assemble() {
 			}
 		} else {
 			_ReLibData.ErrorCallback("This also should never happen (LinkLater[i].Type != JumpTable && LinkLater[i].Type != Pointer)\n");
+			LinkLater.Release();
+			LinkLaterOffsets.Release();
+			XREFs.Release();
+			XREFLabels.Release();
 			return false;
 		}
 	}
