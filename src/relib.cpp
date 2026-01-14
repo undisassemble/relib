@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief ReLib core functions
  * @version 0.0.0
- * @date 2025-05-25
+ * @date 2026-01-14
  * @copyright MIT License
  */
 
@@ -37,8 +37,7 @@ RELIB_EXPORT void Buffer::Allocate(_In_ size_t Size) {
 	}
     size_t szToZero = 0;
     if (szBytes < Size) szToZero = Size - szBytes;
-	ReLibMetrics.Memory.Reserved += Size;
-    ReLibMetrics.Memory.InUse -= szBytes;
+	ReLibMetrics.Memory.ByBuffer += Size - szBytes;
 	szBytes = Size;
 	pBytes = reinterpret_cast<BYTE*>(realloc(pBytes, szBytes));
     RELIB_ASSERT(pBytes != NULL);
@@ -48,8 +47,7 @@ RELIB_EXPORT void Buffer::Allocate(_In_ size_t Size) {
 RELIB_EXPORT void Buffer::Release() {
     if (pBytes) {
 		free(pBytes);
-		ReLibMetrics.Memory.Reserved -= szBytes;
-		ReLibMetrics.Memory.InUse -= szBytes;
+		ReLibMetrics.Memory.ByBuffer -= szBytes;
 	}
     pBytes = NULL;
     szBytes = 0;

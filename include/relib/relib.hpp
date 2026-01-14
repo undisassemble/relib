@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief ReLib main include
  * @version 0.0.0
- * @date 2025-05-27
+ * @date 2026-01-14
  * @copyright MIT License
  */
 
@@ -43,8 +43,9 @@ typedef uint64_t QWORD;
  */
 typedef struct _ReLibMetrics_t {
 	struct {
-		uint64_t InUse = 0;    //!< Total memory in use
-		uint64_t Reserved = 0; //!< Total memory reserved.
+		uint64_t ByBuffer = 0; //!< Memory reserved by buffers (INCLUDING VECTORS)
+		uint64_t ByVector = 0; //!< Memory reserved by vectors
+		uint64_t VectorUsed = 0; //!< Memory in vectors being used
 	} Memory;
 } ReLibMetrics_t;
 
@@ -156,6 +157,7 @@ public:
 	 */
 	inline void Reserve(_In_ size_t nItems) {
 		Allocate(Buffer::Size() + nItems * sizeof(T));
+		ReLibMetrics.Memory.ByVector += nItems * sizeof(T);
 	}
 
 	/*!
@@ -169,7 +171,7 @@ public:
 		RELIB_ASSERT(Buffer::Size() > nItems * sizeof(T));
 		RELIB_ASSERT(!memcpy_s(Buffer::Data() + nItems * sizeof(T), Buffer::Size() - nItems * sizeof(T), Other.Data(), Other.Size() * sizeof(T)));
 		nItems += Other.Size();
-		ReLibMetrics.Memory.InUse += Other.nItems * sizeof(T);
+		ReLibMetrics.Memory.VectorUsed += Other.nItems * sizeof(T);
 		if (bFreeOther) Other.Release();
 	}
 
@@ -198,6 +200,7 @@ public:
 	void Grow() {
 		// Create buffer
 		if (Buffer::Size() < sizeof(T) || !Buffer::Data()) {
+			ReLibMetrics.Memory.ByVector += sizeof(T) * (bExponentialGrowth ? 10 : 1) - Buffer::Size();
 			Allocate(sizeof(T) * (bExponentialGrowth ? 10 : 1));
 		}
 		
@@ -211,6 +214,7 @@ public:
 			} else {
 				NewSize = nItems * sizeof(T);
 			}
+			ReLibMetrics.Memory.ByVector += NewSize - Buffer::Size();
 			Allocate(NewSize);
 		}
 	}
@@ -258,7 +262,7 @@ public:
 		nItems++;
 		Grow();
 		operator[](nItems - 1) = Item;
-		ReLibMetrics.Memory.InUse += sizeof(T);
+		ReLibMetrics.Memory.VectorUsed += sizeof(T);
 	}
 
 	/*!
@@ -273,7 +277,7 @@ public:
 			return ret;
 		}
 		T ret = At(Size() - 1);
-		ReLibMetrics.Memory.InUse -= sizeof(T);
+		ReLibMetrics.Memory.VectorUsed -= sizeof(T);
 		if (Size() == 1) {
 			Release();
 		} else {
@@ -293,7 +297,7 @@ public:
 		Reserve(Items.Size());
 		RELIB_ASSERT(!memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i) * sizeof(T)));
 		RELIB_ASSERT(!memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T)));
-		ReLibMetrics.Memory.InUse += (Items.Size() - 1) * sizeof(T);
+		ReLibMetrics.Memory.VectorUsed += (Items.Size() - 1) * sizeof(T);
 	}
 
 	/*!
@@ -310,8 +314,9 @@ public:
 	 * @brief Release memory being used.
 	 */
 	void Release() {
+		ReLibMetrics.Memory.ByVector -= Buffer::Size();
+		ReLibMetrics.Memory.VectorUsed -= Buffer::Size();
 		Buffer::Release();
-		ReLibMetrics.Memory.InUse -= sizeof(T) * nItems;
 		nItems = 0;
 	}
 
@@ -335,6 +340,7 @@ public:
 		
 		// Insert item
 		operator[](i) = Item;
+		ReLibMetrics.Memory.VectorUsed += sizeof(T);
 	}
 
 	/*!
@@ -349,7 +355,6 @@ public:
 		// Size stuff
 		nItems += Items.Size();
 		Reserve(Items.Size());
-		ReLibMetrics.Memory.InUse += Items.Size() * sizeof(T);
 
 		// Add to end
 		if (i == Size()) {
@@ -360,7 +365,7 @@ public:
 		else {
 			RELIB_ASSERT(!memmove_s(Buffer::Data() + (i + Items.Size()) * sizeof(T), Buffer::Size() - (i + Items.Size()) * sizeof(T), Buffer::Data() + i * sizeof(T), (nItems - i - Items.Size()) * sizeof(T)));
 			RELIB_ASSERT(!memcpy_s(Buffer::Data() + i * sizeof(T), Buffer::Size() - i * sizeof(T), Items.Data(), Items.Size() * sizeof(T)));
-			ReLibMetrics.Memory.InUse += Items.Size() * sizeof(T);
+			ReLibMetrics.Memory.VectorUsed += Items.Size() * sizeof(T);
 		}
 	}
 
@@ -373,7 +378,7 @@ public:
 		if (!Buffer::Data() || !Buffer::Size() || i >= Size()) return;
 		RELIB_ASSERT(!memcpy_s(Buffer::Data() + sizeof(T) * i, Buffer::Size() - sizeof(T) * i, Buffer::Data() + sizeof(T) * (i + 1), (nItems * sizeof(T)) - sizeof(T) * (i + 1)));
 		nItems--;
-		ReLibMetrics.Memory.InUse -= sizeof(T);
+		ReLibMetrics.Memory.VectorUsed -= sizeof(T);
 	}
 
 	/*!
