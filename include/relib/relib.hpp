@@ -3,7 +3,7 @@
  * @author undisassemble
  * @brief ReLib main include
  * @version 0.0.0
- * @date 2026-01-14
+ * @date 2026-03-11
  * @copyright MIT License
  */
 
@@ -95,6 +95,13 @@ private:
 
 public:
 	inline Buffer() { pBytes = NULL; szBytes = 0; }
+
+	/*!
+	 * @brief Creates an empty buffer with the defined size
+	 * 
+	 * @param Size Size of the buffer to create
+	 */
+	inline Buffer(_In_ size_t Size) { pBytes = NULL; szBytes = 0; Allocate(Size); }
 
 	/*!
 	 * @brief Merge with another buffer.
